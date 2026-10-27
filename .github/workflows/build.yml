@@ -86,8 +86,8 @@ jobs:
                   applicationId "ir.hyperlink.extractor"
                   minSdk 23
                   targetSdk 34
-                  versionCode 13
-                  versionName "1.3"
+                  versionCode 14
+                  versionName "1.4"
               }
 
               buildTypes {
@@ -177,10 +177,12 @@ jobs:
           import android.graphics.Color;
           import android.graphics.Typeface;
           import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
           import android.os.Handler;
           import android.os.Looper;
+          import android.os.Message;
           import android.text.TextUtils;
           import android.util.TypedValue;
           import android.view.Gravity;
@@ -191,6 +193,7 @@ jobs:
           import android.webkit.GeolocationPermissions;
           import android.webkit.WebChromeClient;
           import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
           import android.webkit.WebSettings;
           import android.webkit.WebStorage;
           import android.webkit.WebView;
@@ -212,9 +215,13 @@ jobs:
           import java.net.HttpURLConnection;
           import java.net.URL;
           import java.nio.charset.StandardCharsets;
-          import java.util.Iterator;
-          import java.util.LinkedHashMap;
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util. LinkedHashMap;
+          import java.util.LinkedHashSet;
+          import java.util.List;
           import java.util.Map;
+          import java.util.Set;
 
           public class MainActivity extends Activity {
 
@@ -247,7 +254,11 @@ jobs:
 
               private JSONObject extractedDataCache = null;
               private String lastLicenseKey = null;
-              private final Map<String, String> sessionLocalStorageCache = new LinkedHashMap<>();
+
+              // ذخیره تمام زیرشاخه‌ها و آدرس‌های درخواست‌شده برای شکار ۱۰۰٪ کوکی‌ها مشابه کروم
+              private final Set<String> observedCabUrls = Collections.synchronizedSet(new LinkedHashSet<>());
+              private final Set<String> observedIrUrls = Collections.synchronizedSet(new LinkedHashSet<>());
+
               private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
               @SuppressLint("SetJavaScriptEnabled")
@@ -261,6 +272,7 @@ jobs:
                       getWindow().setNavigationBarColor(Color.parseColor(COLOR_BG_BAR));
                   }
 
+                  seedDefaultDomains();
                   requestLocationPermissionsIfNeeded();
 
                   LinearLayout root = new LinearLayout(this);
@@ -284,7 +296,7 @@ jobs:
                   brandTitle.setTypeface(Typeface.DEFAULT_BOLD);
 
                   statusBadge = new TextView(this);
-                  statusBadge.setText("آماده به کار");
+                  statusBadge.setText("ابتدا وارد سوپرمارکت شوید");
                   statusBadge.setTextColor(Color.parseColor(COLOR_TEXT_MUTED));
                   statusBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
                   statusBadge.setSingleLine(true);
@@ -386,7 +398,7 @@ jobs:
                   // متن کلید لایسنس یا خطا
                   licenseValueView = new TextView(this);
                   licenseValueView.setTextColor(Color.parseColor(COLOR_ACCENT));
-                  licenseValueView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                  licenseValueView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
                   licenseValueView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
                   licenseValueView.setGravity(Gravity.CENTER);
                   licenseValueView.setTextIsSelectable(true);
@@ -475,6 +487,51 @@ jobs:
                   webView.loadUrl(TAPSI_START_URL);
               }
 
+              private void seedDefaultDomains() {
+                  observedCabUrls.clear();
+                  observedIrUrls.clear();
+
+                  observedCabUrls.add("https://tapsi.cab");
+                  observedCabUrls.add("https://www.tapsi.cab");
+                  observedCabUrls.add("https://app.tapsi.cab");
+                  observedCabUrls.add("https://api.tapsi.cab");
+                  observedCabUrls.add("https://accounts.tapsi.cab");
+                  observedCabUrls.add("https://sso.tapsi.cab");
+
+                  observedIrUrls.add("https://tapsi.ir");
+                  observedIrUrls.add("https://www.tapsi.ir");
+                  observedIrUrls.add("https://api.tapsi.ir");
+                  observedIrUrls.add("https://sso.tapsi.ir");
+                  observedIrUrls.add("https://accounts.tapsi.ir");
+                  observedIrUrls.add("https://market.tapsi.ir");
+                  observedIrUrls.add("https://supermarket.tapsi.ir");
+                  observedIrUrls.add("https://tapsi.markets");
+                  observedIrUrls.add("https://www.tapsi.markets");
+                  observedIrUrls.add("https://api.tapsi.markets");
+              }
+
+              private void recordObservedUrl(String urlStr) {
+                  if (urlStr == null || urlStr.isEmpty()) return;
+                  try {
+                      Uri uri = Uri.parse(urlStr);
+                      String scheme = uri.getScheme();
+                      String host = uri.getHost();
+                      if (scheme == null || host == null) return;
+                      if (!scheme.equals("http") && !scheme.equals("https")) return;
+
+                      String origin = scheme + "://" + host;
+                      String lowerHost = host.toLowerCase();
+                      if (lowerHost.endsWith("tapsi.cab")) {
+                          observedCabUrls.add(origin);
+                          observedCabUrls.add(urlStr);
+                      } else if (lowerHost.endsWith("tapsi.ir") || lowerHost.endsWith("tapsi.markets")) {
+                          observedIrUrls.add(origin);
+                          observedIrUrls.add(urlStr);
+                      }
+                  } catch (Exception ignored) {
+                  }
+              }
+
               @SuppressLint("SetJavaScriptEnabled")
               private void setupWebView() {
                   WebSettings settings = webView.getSettings();
@@ -485,7 +542,8 @@ jobs:
                   settings.setLoadWithOverviewMode(true);
                   settings.setUseWideViewPort(true);
                   settings.setJavaScriptCanOpenWindowsAutomatically(true);
-                  settings.setSupportMultipleWindows(false);
+                  // فعال بودن پنجره‌های چندگانه برای انتقال کامل توکن سوپرمارکت هنگام کلیک روی آیکون سوپرمارکت
+                  settings.setSupportMultipleWindows(true);
                   settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
                   String defaultUa = settings.getUserAgentString();
@@ -514,12 +572,53 @@ jobs:
                       public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
                           callback.invoke(origin, true, false);
                       }
+
+                      @SuppressLint("SetJavaScriptEnabled")
+                      @Override
+                      public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                          // وقتی تپسی پنجره جدیدی برای سوپرمارکت باز می‌کند، لینک حاوی توکن را گرفته و در همین WebView باز می‌کنیم
+                          WebView tempWebView = new WebView(MainActivity.this);
+                          tempWebView.getSettings().setJavaScriptEnabled(true);
+                          tempWebView.getSettings().setDomStorageEnabled(true);
+                          tempWebView.setWebViewClient(new WebViewClient() {
+                              @Override
+                              public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                                  String targetUrl = request.getUrl().toString();
+                                  recordObservedUrl(targetUrl);
+                                  webView.loadUrl(targetUrl);
+                                  v.destroy();
+                                  return true;
+                              }
+
+                              @Override
+                              public void onPageStarted(WebView v, String url, Bitmap favicon) {
+                                  if (url != null && !url.equals("about:blank")) {
+                                      recordObservedUrl(url);
+                                      webView.loadUrl(url);
+                                      v.destroy();
+                                  }
+                              }
+                          });
+                          WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+                          transport.setWebView(tempWebView);
+                          resultMsg.sendToTarget();
+                          return true;
+                      }
                   });
 
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          if (request != null && request.getUrl() != null) {
+                              recordObservedUrl(request.getUrl().toString());
+                          }
+                          return super.shouldInterceptRequest(view, request);
+                      }
+
+                      @Override
                       public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                           String url = request.getUrl().toString();
+                          recordObservedUrl(url);
                           if (url.startsWith("http://") || url.startsWith("https://")) {
                               return false;
                           }
@@ -529,62 +628,34 @@ jobs:
                       @Override
                       public void onPageStarted(WebView view, String url, Bitmap favicon) {
                           super.onPageStarted(view, url, favicon);
-                          injectPopupRedirectHelper();
+                          recordObservedUrl(url);
                       }
 
                       @Override
                       public void onPageFinished(WebView view, String url) {
                           super.onPageFinished(view, url);
+                          recordObservedUrl(url);
                           CookieManager.getInstance().flush();
-                          injectPopupRedirectHelper();
-                          captureCurrentLocalStorage();
+
+                          if (url != null && (url.contains("tapsi.markets") || url.contains("market"))) {
+                              updateStatusBadge("✅ داخل سوپرمارکت (آماده استخراج)", COLOR_SUCCESS);
+                          }
                       }
                   });
               }
 
-              private void injectPopupRedirectHelper() {
-                  webView.evaluateJavascript(
-                          "(function() {" +
-                          "  window.open = function(url) { if (url) { window.location.href = url; } return window; };" +
-                          "  document.addEventListener('click', function(e) {" +
-                          "    var a = e.target && e.target.closest ? e.target.closest('a[target=\"_blank\"]') : null;" +
-                          "    if (a && a.href) { a.removeAttribute('target'); }" +
-                          "  }, true);" +
-                          "})();",
-                          null
-                  );
-              }
-
-              private void captureCurrentLocalStorage() {
-                  webView.evaluateJavascript(
-                          "(function() { try { return JSON.stringify(window.localStorage); } catch(e) { return '{}'; } })();",
-                          value -> {
-                              try {
-                                  String rawJson = unwrapJsString(value);
-                                  if (rawJson != null && rawJson.startsWith("{")) {
-                                      JSONObject obj = new JSONObject(rawJson);
-                                      Iterator<String> keys = obj.keys();
-                                      while (keys.hasNext()) {
-                                          String k = keys.next();
-                                          sessionLocalStorageCache.put(k, obj.optString(k, ""));
-                                      }
-                                  }
-                              } catch (Exception ignored) {
-                              }
-                          }
-                  );
-              }
-
               // ==========================================
-              // 1. استخراج و ساخت لایسنس (بدون نیاز به ورود به مارکت)
+              // 1. استخراج و ساخت لایسنس (دقیقاً مطابق منطق اکستنشن کروم)
               // ==========================================
               private void extractAndCreateLicense() {
-                  updateStatusBadge("⏳ در حال استخراج...", COLOR_WARNING);
+                  updateStatusBadge("⏳ در حال بررسی و استخراج...", COLOR_WARNING);
                   resultCard.setVisibility(View.GONE);
                   extractedDataCache = null;
                   lastLicenseKey = null;
 
                   String currentUrl = webView.getUrl() != null ? webView.getUrl() : "";
+                  recordObservedUrl(currentUrl);
+
                   if (currentUrl.isEmpty() || (!currentUrl.contains("tapsi.cab") && !currentUrl.contains("tapsi.ir") && !currentUrl.contains("tapsi.markets"))) {
                       updateStatusBadge("❌ خارج از تپسی", COLOR_ERROR);
                       showResultCard("❌ خطا در استخراج", "لطفاً ابتدا وارد سایت تپسی شوید.", COLOR_ERROR, false, false);
@@ -594,58 +665,45 @@ jobs:
                   CookieManager cookieManager = CookieManager.getInstance();
                   cookieManager.flush();
 
-                  String[] allTapsiUrls = new String[]{
-                          "https://tapsi.cab",
-                          "https://app.tapsi.cab",
-                          "https://api.tapsi.cab",
-                          "https://accounts.tapsi.cab",
-                          "https://tapsi.ir",
-                          "https://www.tapsi.ir",
-                          "https://market.tapsi.ir",
-                          "https://supermarket.tapsi.ir",
-                          "https://api.tapsi.ir",
-                          "https://tapsi.markets",
-                          "https://app.tapsi.markets",
-                          currentUrl
-                  };
+                  // استخراج مجزای کوکی‌های tapsi.cab و کوکی‌های مارکت (tapsi.ir / tapsi.markets) بدون بازنویسی روی هم
+                  Map<String, String> cookiesCab = collectCookiesForUrlSet(cookieManager, observedCabUrls);
+                  Map<String, String> cookiesIr = collectCookiesForUrlSet(cookieManager, observedIrUrls);
 
-                  Map<String, String> allCookies = collectCookiesForUrls(cookieManager, allTapsiUrls);
-
-                  StringBuilder cookieBuilder = new StringBuilder();
-                  for (Map.Entry<String, String> entry : allCookies.entrySet()) {
-                      if (cookieBuilder.length() > 0) {
-                          cookieBuilder.append("; ");
-                      }
-                      cookieBuilder.append(entry.getKey()).append("=").append(entry.getValue());
+                  // بررسی اینکه کاربر حتماً وارد سوپرمارکت شده باشد تا توکن مارکت تولید شده باشد
+                  if (cookiesIr.isEmpty() && !currentUrl.contains("tapsi.markets")) {
+                      updateStatusBadge("❌ وارد سوپرمارکت نشده‌اید", COLOR_ERROR);
+                      showResultCard(
+                              "❌ اطلاعات مارکت ناقص است!",
+                              "شما هنوز وارد سوپرمارکت نشده‌اید.\nابتدا در صفحه تپسی روی آیکون «سوپرمارکت» بزنید تا صفحه مارکت باز شود، سپس دکمه ساخت لایسنس را بزنید.",
+                              COLOR_ERROR,
+                              false,
+                              false
+                      );
+                      return;
                   }
-                  final String cookieString = cookieBuilder.toString();
 
+                  List<String> cookiePairs = new ArrayList<>();
+                  for (Map.Entry<String, String> entry : cookiesCab.entrySet()) {
+                      cookiePairs.add(entry.getKey() + "=" + entry.getValue());
+                  }
+                  for (Map.Entry<String, String> entry : cookiesIr.entrySet()) {
+                      cookiePairs.add(entry.getKey() + "=" + entry.getValue());
+                  }
+                  final String cookieString = TextUtils.join("; ", cookiePairs);
+
+                  // استخراج دقیقاً window.localStorage تب فعلی بدون ادغام با صفحات قبلی (مشابه popup.js)
                   webView.evaluateJavascript(
-                          "(function() { try { return JSON.stringify(window.localStorage); } catch(e) { return '{}'; } })();",
+                          "(function() { return JSON.stringify(window.localStorage); })();",
                           value -> {
                               try {
-                                  JSONObject mergedStorage = new JSONObject();
-                                  for (Map.Entry<String, String> entry : sessionLocalStorageCache.entrySet()) {
-                                      mergedStorage.put(entry.getKey(), entry.getValue());
+                                  String localStorageData = unwrapJsString(value);
+                                  if (localStorageData == null || localStorageData.trim().isEmpty()) {
+                                      localStorageData = "{}";
                                   }
-
-                                  String currentLsRaw = unwrapJsString(value);
-                                  if (currentLsRaw != null && currentLsRaw.startsWith("{")) {
-                                      JSONObject currentLsObj = new JSONObject(currentLsRaw);
-                                      Iterator<String> keys = currentLsObj.keys();
-                                      while (keys.hasNext()) {
-                                          String k = keys.next();
-                                          String v = currentLsObj.optString(k, "");
-                                          mergedStorage.put(k, v);
-                                          sessionLocalStorageCache.put(k, v);
-                                      }
-                                  }
-
-                                  String localStorageData = mergedStorage.toString();
 
                                   extractedDataCache = new JSONObject();
                                   extractedDataCache.put("cookies", cookieString.isEmpty() ? "empty" : cookieString);
-                                  extractedDataCache.put("local_storage", localStorageData.isEmpty() ? "{}" : localStorageData);
+                                  extractedDataCache.put("local_storage", localStorageData);
                                   extractedDataCache.put("phone_number", "unknown");
 
                                   updateStatusBadge("⏳ در حال صدور لایسنس...", COLOR_WARNING);
@@ -761,7 +819,7 @@ jobs:
                   resultCard.setVisibility(View.GONE);
 
                   try {
-                      sessionLocalStorageCache.clear();
+                      seedDefaultDomains();
                       extractedDataCache = null;
                       lastLicenseKey = null;
 
@@ -780,8 +838,8 @@ jobs:
                           webView.clearHistory();
                           webView.loadUrl(TAPSI_START_URL);
 
-                          updateStatusBadge("✅ آماده برای نشست جدید", COLOR_SUCCESS);
-                          Toast.makeText(this, "✅ مرورگر پاک‌سازی و رفرش شد", Toast.LENGTH_SHORT).show();
+                          updateStatusBadge("ابتدا وارد سوپرمارکت شوید", COLOR_TEXT_MUTED);
+                          Toast.makeText(this, "✅ مرورگر پاک‌سازی شد؛ آماده ورود با شماره جدید", Toast.LENGTH_SHORT).show();
                       });
 
                   } catch (Exception err) {
@@ -790,7 +848,7 @@ jobs:
               }
 
               // ==========================================
-              // توابع کمکی رابط کاربری
+              // توابع کمکی
               // ==========================================
               private void updateStatusBadge(String text, String colorHex) {
                   statusBadge.setText(text);
@@ -809,9 +867,13 @@ jobs:
                   resultCard.setVisibility(View.VISIBLE);
               }
 
-              private Map<String, String> collectCookiesForUrls(CookieManager cm, String[] urls) {
+              private Map<String, String> collectCookiesForUrlSet(CookieManager cm, Set<String> urls) {
                   Map<String, String> map = new LinkedHashMap<>();
-                  for (String u : urls) {
+                  List<String> snapshot;
+                  synchronized (urls) {
+                      snapshot = new ArrayList<>(urls);
+                  }
+                  for (String u : snapshot) {
                       if (u == null || u.isEmpty()) continue;
                       String raw = cm.getCookie(u);
                       if (raw != null && !raw.trim().isEmpty()) {
@@ -920,19 +982,19 @@ jobs:
 
       - name: Prepare Output APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk HyperLink-Extractor-v1.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk HyperLink-Extractor-v1.4.apk
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: HyperLink-Extractor-APK
-          path: HyperLink-Extractor-v1.3.apk
+          path: HyperLink-Extractor-v1.4.apk
 
       - name: Create GitHub Release (Optional Direct Download)
         uses: softprops/action-gh-release@v2
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         with:
-          tag_name: v1.3.${{ github.run_number }}
+          tag_name: v1.4.${{ github.run_number }}
           name: "HyperLink Extractor APK (Build #${{ github.run_number }})"
-          files: HyperLink-Extractor-v1.3.apk
+          files: HyperLink-Extractor-v1.4.apk
