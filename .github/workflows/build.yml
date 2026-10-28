@@ -86,8 +86,8 @@ jobs:
                   applicationId "ir.hyperlink.discounts"
                   minSdk 23
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
 
               buildTypes {
@@ -174,6 +174,7 @@ jobs:
           import android.content.ClipboardManager;
           import android.content.Context;
           import android.content.Intent;
+          import android.graphics.Bitmap;
           import android.graphics.Color;
           import android.graphics.Typeface;
           import android.graphics.drawable.GradientDrawable;
@@ -214,16 +215,17 @@ jobs:
           import org.json.JSONObject;
 
           import java.io.BufferedReader;
+          import java.io.ByteArrayOutputStream;
+          import java.io.DataInputStream;
           import java.io.File;
           import java.io.FileOutputStream;
+          import java.io.IOException;
           import java.io.InputStream;
           import java.io.InputStreamReader;
           import java.io.OutputStream;
-          import java.net.Authenticator;
           import java.net.HttpURLConnection;
           import java.net.InetSocketAddress;
-          import java.net.PasswordAuthentication;
-          import java.net.Proxy;
+          import java.net.Socket;
           import java.net.URL;
           import java.net.URLDecoder;
           import java.net.URLEncoder;
@@ -246,6 +248,12 @@ jobs:
           import java.util.concurrent.atomic.AtomicBoolean;
           import java.util.regex.Matcher;
           import java.util.regex.Pattern;
+          import java.util.zip.GZIPInputStream;
+
+          import javax.net.ssl.SNIHostName;
+          import javax.net.ssl.SSLParameters;
+          import javax.net.ssl.SSLSocket;
+          import javax.net.ssl.SSLSocketFactory;
 
           public class MainActivity extends Activity {
 
@@ -276,12 +284,6 @@ jobs:
               private static final Set<String> RESERVED_COOKIE_ATTRS = new HashSet<>(Arrays.asList(
                       "path", "domain", "expires", "max-age", "secure", "httponly", "samesite"
               ));
-
-              private static final String[] TARGET_DOMAINS = new String[]{
-                      ".tapsi.cab", "app.tapsi.cab", "api.tapsi.cab", "tapsi.cab",
-                      ".tapsi.ir", "accounts.tapsi.ir", "accounts-api.tapsi.ir", "tapsi.ir",
-                      ".tapsi.markets", "www.tapsi.markets", "apigateway.tapsi.markets", "tapsi.markets"
-              };
 
               // ویجت‌های رابط کاربری
               private TextView statusBadge;
@@ -318,11 +320,12 @@ jobs:
               private LinearLayout resultsContainer;
               private TextView reportPreviewText;
 
-              // لاگ و مرورگر پشتیبان
+              // لاگ و مرورگر پشتیبان (در لایه اصلی قرار دارد تا هرگز در تب مخفی متوقف نشود)
               private TextView logView;
               private ScrollView logScrollView;
               private FrameLayout webViewContainer;
               private WebView webView;
+              private boolean isWebViewExpanded = false;
 
               // دکمه‌های پایین صفحه
               private Button startCheckBtn;
@@ -341,6 +344,7 @@ jobs:
               // وضعیت مرورگر پشتیبان
               private volatile String activeStepId = "init";
               private volatile String activeLocalStorageRaw = "{}";
+              private volatile String activeExistingSessionId = "";
               private volatile String capturedDiscountsJson = null;
               private volatile CountDownLatch webViewLatch = null;
 
@@ -359,8 +363,12 @@ jobs:
                       return username != null && !username.isEmpty() && password != null;
                   }
 
-                  boolean isSocks() {
-                      return "SOCKS5".equals(scheme) || "SOCKS4".equals(scheme);
+                  boolean isSocks5() {
+                      return "SOCKS5".equals(scheme);
+                  }
+
+                  boolean isSocks4() {
+                      return "SOCKS4".equals(scheme);
                   }
 
                   String getDisplayLabel() {
@@ -410,7 +418,6 @@ jobs:
                           String[] leftParts = left.split(":");
 
                           if (rightParts.length == 2 && parsePort(rightParts[1]) > 0) {
-                              // user:pass@host:port
                               hostPart = right;
                               int colon = left.indexOf(':');
                               if (colon > 0) {
@@ -421,7 +428,6 @@ jobs:
                                   pass = "";
                               }
                           } else if (leftParts.length == 2 && parsePort(leftParts[1]) > 0) {
-                              // host:port@user:pass
                               hostPart = left;
                               int colon = right.indexOf(':');
                               if (colon > 0) {
@@ -451,7 +457,6 @@ jobs:
                           int secondPort = parsePort(parts[1].trim());
                           int lastPort = parsePort(parts[parts.length - 1].trim());
                           if (secondPort > 0) {
-                              // ip:port:user:pass
                               ProxyConfig cfg = new ProxyConfig();
                               cfg.raw = line.trim();
                               cfg.scheme = scheme;
@@ -466,7 +471,6 @@ jobs:
                               cfg.password = sb.toString().trim();
                               return cfg;
                           } else if (lastPort > 0) {
-                              // user:pass:ip:port
                               ProxyConfig cfg = new ProxyConfig();
                               cfg.raw = line.trim();
                               cfg.scheme = scheme;
@@ -639,13 +643,27 @@ jobs:
                   statsStrip.addView(chipsRow);
 
                   statusBadge = new TextView(this);
-                  statusBadge.setText("آماده دریافت لیست لایسنس‌ها و پروکسی");
+                  statusBadge.setText("آماده دریافت لیست لایسنس‌ها و بررسی تخفیف‌ها");
                   statusBadge.setTextColor(Color.parseColor(COLOR_TEXT_MUTED));
                   statusBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
                   statusBadge.setPadding(dp(4), dp(5), dp(4), 0);
                   statsStrip.addView(statusBadge);
 
                   root.addView(statsStrip);
+
+                  // ==========================================
+                  // ۲.۵. کانتینر مرورگر پشتیبان در لایه اصلی (Root)
+                  // قرارگیری در لایه اصلی باعث می‌شود اندروید هرگز اجرای جاوااسکریپت WebView را متوقف نکند
+                  // ==========================================
+                  webViewContainer = new FrameLayout(this);
+                  webView = new WebView(this);
+                  setupWebView(webView);
+                  webViewContainer.addView(webView, new FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                  ));
+                  root.addView(webViewContainer, new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+                  ));
 
                   // ==========================================
                   // ۳. نوار تب‌ها
@@ -655,13 +673,13 @@ jobs:
                   tabBar.setBackgroundColor(Color.parseColor(COLOR_BG_CARD));
                   tabBar.setPadding(dp(8), dp(6), dp(8), dp(6));
 
-                  tabInputBtn = createTabButton("۱. ورودی و پروکسی", true);
+                  tabInputBtn = createTabButton("۱. ورودی‌ها", true);
                   tabResultsBtn = createTabButton("۲. تخفیف‌ها (۰)", false);
                   tabReportBtn = createTabButton("۳. گزارش TXT", false);
                   tabLogsBtn = createTabButton("۴. لاگ زنده", false);
 
                   LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(
-                          0, dp(36), 1f
+                          0, dp(38), 1f
                   );
                   tabLp.setMargins(dp(3), 0, dp(3), 0);
                   tabBar.addView(tabInputBtn, tabLp);
@@ -825,7 +843,7 @@ jobs:
                   proxyHeader.setGravity(Gravity.CENTER_VERTICAL);
 
                   TextView proxyTitle = new TextView(this);
-                  proxyTitle.setText("🌐 لیست پروکسی (جلوگیری از فشار روی سرور)");
+                  proxyTitle.setText("🌐 لیست پروکسی (تانل مستقیم HTTP / SOCKS5)");
                   proxyTitle.setTextColor(Color.parseColor(COLOR_PURPLE));
                   proxyTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
                   proxyTitle.setTypeface(Typeface.DEFAULT_BOLD);
@@ -845,7 +863,7 @@ jobs:
                   proxyCard.addView(proxyHeader);
 
                   TextView proxyFormatHint = new TextView(this);
-                  proxyFormatHint.setText("پشتیبانی خودکار از تمام فرمت‌ها: ip:port ، ip:port:user:pass ، user:pass@ip:port ، http:// ، https:// ، socks5:// و socks4://");
+                  proxyFormatHint.setText("پشتیبانی از تمام فرمت‌ها: ip:port ، ip:port:user:pass ، user:pass@ip:port ، http:// ، socks5:// و socks4://\nنکته: سرورهای تپسی به IP ایران نیاز دارند؛ اگر پروکسی خارج یا VPN روشن باشد، مرورگر پشتیبان یا ارتباط مستقیم جایگزین می‌شود.");
                   proxyFormatHint.setTextColor(Color.parseColor(COLOR_TEXT_MUTED));
                   proxyFormatHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
                   proxyFormatHint.setPadding(0, dp(4), 0, dp(4));
@@ -866,7 +884,7 @@ jobs:
                   proxyCard.addView(randomProxyCheck);
 
                   webViewFallbackCheck = new CheckBox(this);
-                  webViewFallbackCheck.setText("تازه‌سازی هوشمند نشست با مرورگر داخلی در صورت انقضای توکن");
+                  webViewFallbackCheck.setText("تازه‌سازی خودکار نشست تپسی با مرورگر داخلی (SSO) در صورت انقضای توکن");
                   webViewFallbackCheck.setTextColor(Color.parseColor(COLOR_TEXT_MAIN));
                   webViewFallbackCheck.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
                   webViewFallbackCheck.setChecked(true);
@@ -994,12 +1012,12 @@ jobs:
                   LinearLayout actionRow = new LinearLayout(this);
                   actionRow.setOrientation(LinearLayout.HORIZONTAL);
 
-                  Button saveDirectBtn = createActionButton("📥 ذخیره در پوشه Download", COLOR_SUCCESS, "#052E16", null);
-                  LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+                  Button saveDirectBtn = createActionButton("📥 ذخیره در Download", COLOR_SUCCESS, "#052E16", null);
+                  LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
                   btnLp.setMargins(dp(3), 0, dp(3), 0);
                   saveDirectBtn.setOnClickListener(v -> triggerSaveTxtReport(false));
 
-                  Button savePickerBtn = createActionButton("📂 انتخاب مسیر ذخیره (.txt)", COLOR_ACCENT, "#090D16", null);
+                  Button savePickerBtn = createActionButton("📂 انتخاب مسیر (.txt)", COLOR_ACCENT, "#090D16", null);
                   savePickerBtn.setOnClickListener(v -> triggerSaveTxtReport(true));
 
                   Button copyReportBtn = createActionButton("📋 کپی کل متن", COLOR_BG_CARD, COLOR_ACCENT, COLOR_ACCENT);
@@ -1041,9 +1059,8 @@ jobs:
               }
 
               // ==========================================
-              // ساخت تب ۴: لاگ زنده و مرورگر پشتیبان
+              // ساخت تب ۴: لاگ زنده و کنترل مرورگر پشتیبان
               // ==========================================
-              @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
               private View buildLogsTab() {
                   LinearLayout wrapper = new LinearLayout(this);
                   wrapper.setOrientation(LinearLayout.VERTICAL);
@@ -1060,17 +1077,14 @@ jobs:
                   logTitle.setTypeface(Typeface.DEFAULT_BOLD);
                   headerRow.addView(logTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-                  Button toggleWvBtn = createSmallButton("👁 مرورگر پشتیبان", COLOR_BG_CARD, COLOR_TEXT_MAIN, COLOR_BORDER);
+                  Button toggleWvBtn = createSmallButton("👁 نمایش مرورگر", COLOR_BG_CARD, COLOR_TEXT_MAIN, COLOR_BORDER);
                   toggleWvBtn.setOnClickListener(v -> {
-                      if (webViewContainer.getLayoutParams().height <= dp(5)) {
-                          webViewContainer.setLayoutParams(new LinearLayout.LayoutParams(
-                                  ViewGroup.LayoutParams.MATCH_PARENT, dp(190)
-                          ));
-                      } else {
-                          webViewContainer.setLayoutParams(new LinearLayout.LayoutParams(
-                                  ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
-                          ));
-                      }
+                      isWebViewExpanded = !isWebViewExpanded;
+                      webViewContainer.setLayoutParams(new LinearLayout.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              isWebViewExpanded ? dp(200) : dp(1)
+                      ));
+                      toggleWvBtn.setText(isWebViewExpanded ? "🙈 مخفی کردن مرورگر" : "👁 نمایش مرورگر");
                   });
                   headerRow.addView(toggleWvBtn);
 
@@ -1083,16 +1097,6 @@ jobs:
                   headerRow.addView(clearLogBtn, clp);
 
                   wrapper.addView(headerRow);
-
-                  webViewContainer = new FrameLayout(this);
-                  webView = new WebView(this);
-                  setupWebView(webView);
-                  webViewContainer.addView(webView, new FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                  ));
-                  wrapper.addView(webViewContainer, new LinearLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
-                  ));
 
                   logScrollView = new ScrollView(this);
                   logScrollView.setFillViewport(true);
@@ -1107,9 +1111,10 @@ jobs:
                   logView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
                   logView.setTypeface(Typeface.MONOSPACE);
                   logView.setPadding(dp(10), dp(8), dp(10), dp(8));
-                  logView.setText("👋 آماده بررسی تخفیف اکانت‌های تپسی!\n" +
-                          "• لیست لایسنس‌ها و در صورت نیاز لیست پروکسی را در تب اول وارد کنید.\n" +
-                          "• تمام سرویس‌ها (تاکسی، فود، سوپرمارکت، پیک، فروشگاه، گاراژ و پزشک) بررسی می‌شوند.\n");
+                  logView.setText("👋 نسخه ۲.۰ بررسی‌کننده تخفیف اکانت‌های تپسی آماده است!\n" +
+                          "• جداسازی کامل کوکی سوپرمارکت (Cerberus) از کوکی اصلی تپسی برای رفع خطای 403.\n" +
+                          "• تانل مستقیم سوکت برای پروکسی‌های دارای یوزر و پسورد (HTTP و SOCKS5).\n" +
+                          "• تازه‌سازی خودکار نشست SSO در صورت انقضای کوکی تپسی.\n");
                   logScrollView.addView(logView);
 
                   LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
@@ -1136,7 +1141,7 @@ jobs:
                   wv.addJavascriptInterface(new Object() {
                       @JavascriptInterface
                       public void onDiscountsCaptured(String jsonStr) {
-                          if (jsonStr != null && jsonStr.contains("discounts")) {
+                          if (jsonStr != null && (jsonStr.contains("\"discounts\"") || jsonStr.contains("\"categories\""))) {
                               capturedDiscountsJson = jsonStr;
                               CountDownLatch latch = webViewLatch;
                               if (latch != null) latch.countDown();
@@ -1146,6 +1151,12 @@ jobs:
 
                   wv.setWebChromeClient(new WebChromeClient());
                   wv.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                          super.onPageStarted(view, url, favicon);
+                          injectWebViewDiscountFetch(view);
+                      }
+
                       @Override
                       public void onPageFinished(WebView view, String url) {
                           super.onPageFinished(view, url);
@@ -1157,10 +1168,13 @@ jobs:
               private void injectWebViewDiscountFetch(WebView view) {
                   String safeLs = JSONObject.quote(activeLocalStorageRaw != null ? activeLocalStorageRaw : "{}");
                   String safeStep = JSONObject.quote(activeStepId);
+                  String safeExistingSid = JSONObject.quote(activeExistingSessionId != null ? activeExistingSessionId : "");
+
                   String js = "(function() {" +
                           "  try {" +
                           "    var host = window.location.hostname || '';" +
                           "    var stepKey = '__dc_step_' + " + safeStep + ";" +
+                          "    var existingSid = " + safeExistingSid + ";" +
                           "    if (host.indexOf('tapsi.cab') !== -1) {" +
                           "      if (window.sessionStorage.getItem(stepKey) !== '1') {" +
                           "        window.localStorage.clear();" +
@@ -1174,15 +1188,76 @@ jobs:
                           "          }" +
                           "        }" +
                           "      }" +
+                          "    }" +
+                          "    if (!window.__dcHooked) {" +
+                          "      window.__dcHooked = true;" +
+                          "      var origFetch = window.fetch;" +
+                          "      if (origFetch) {" +
+                          "        window.fetch = function() {" +
+                          "          var u = (arguments[0] && arguments[0].url) ? arguments[0].url : String(arguments[0] || '');" +
+                          "          return origFetch.apply(this, arguments).then(function(res) {" +
+                          "            try {" +
+                          "              if (u.indexOf('discountCenter/getDiscounts') !== -1 && res.status === 200) {" +
+                          "                res.clone().text().then(function(t) {" +
+                          "                  if (t && t.indexOf('discounts') !== -1 && window.DiscountBridge) {" +
+                          "                    window.DiscountBridge.onDiscountsCaptured(t);" +
+                          "                  }" +
+                          "                });" +
+                          "              }" +
+                          "            } catch(e) {}" +
+                          "            return res;" +
+                          "          });" +
+                          "        };" +
+                          "      }" +
+                          "      var origOpen = XMLHttpRequest.prototype.open;" +
+                          "      var origSend = XMLHttpRequest.prototype.send;" +
+                          "      XMLHttpRequest.prototype.open = function(m, u) {" +
+                          "        this.__dcUrl = String(u || '');" +
+                          "        return origOpen.apply(this, arguments);" +
+                          "      };" +
+                          "      XMLHttpRequest.prototype.send = function() {" +
+                          "        var self = this;" +
+                          "        this.addEventListener('load', function() {" +
+                          "          try {" +
+                          "            if (self.__dcUrl && self.__dcUrl.indexOf('discountCenter/getDiscounts') !== -1 && self.status === 200) {" +
+                          "              if (self.responseText && self.responseText.indexOf('discounts') !== -1 && window.DiscountBridge) {" +
+                          "                window.DiscountBridge.onDiscountsCaptured(self.responseText);" +
+                          "              }" +
+                          "            }" +
+                          "          } catch(e) {}" +
+                          "        });" +
+                          "        return origSend.apply(this, arguments);" +
+                          "      };" +
+                          "    }" +
+                          "    if (host.indexOf('tapsi.cab') !== -1) {" +
+                          "      if (!window.__dcPoller || window.__dcPollerStep !== stepKey) {" +
+                          "        window.__dcPollerStep = stepKey;" +
+                          "        var tries = 0;" +
+                          "        window.__dcPoller = setInterval(function() {" +
+                          "          tries++;" +
+                          "          if (tries > 6) { clearInterval(window.__dcPoller); return; }" +
+                          "          fetch('https://api.tapsi.cab/api/v3/superApp/discountCenter/getDiscounts', {" +
+                          "            method: 'GET', credentials: 'include', headers: {'Content-Type': 'application/json', 'Accept': 'application/json'}" +
+                          "          }).then(function(r){ return r.status === 200 ? r.text() : null; }).then(function(t){" +
+                          "            if (t && t.indexOf('discounts') !== -1 && window.DiscountBridge) {" +
+                          "              clearInterval(window.__dcPoller);" +
+                          "              window.DiscountBridge.onDiscountsCaptured(t);" +
+                          "            }" +
+                          "          }).catch(function(e){});" +
+                          "        }, 1200);" +
+                          "      }" +
+                          "    } else if (host.indexOf('accounts.tapsi.ir') !== -1) {" +
                           "      setTimeout(function() {" +
-                          "        fetch('https://api.tapsi.cab/api/v3/superApp/discountCenter/getDiscounts', {" +
-                          "          method: 'GET', credentials: 'include', headers: {'Content-Type': 'application/json'}" +
-                          "        }).then(function(r){return r.text();}).then(function(t){" +
-                          "          if (t && t.indexOf('discounts') !== -1 && window.DiscountBridge) {" +
-                          "            window.DiscountBridge.onDiscountsCaptured(t);" +
+                          "        try {" +
+                          "          var els = document.querySelectorAll('button, [role=\"button\"], li, div');" +
+                          "          for (var i = 0; i < els.length; i++) {" +
+                          "            var txt = (els[i].innerText || '').trim();" +
+                          "            if (txt.indexOf('09') !== -1 || txt.indexOf('۰۹') !== -1 || txt.indexOf('+98') !== -1) {" +
+                          "              els[i].click(); break;" +
+                          "            }" +
                           "          }" +
-                          "        }).catch(function(e){});" +
-                          "      }, 1000);" +
+                          "        } catch(e) {}" +
+                          "      }, 800);" +
                           "    }" +
                           "  } catch(e) {}" +
                           "})();";
@@ -1272,7 +1347,7 @@ jobs:
                                   }
                               } else {
                                   withoutDiscount++;
-                                  appendLog("   ℹ️ بدون تخفیف فعال");
+                                  appendLog("   ℹ️ بدون تخفیف فعال (" + (!res.phone.isEmpty() ? res.phone : "بررسی شد") + ")");
                               }
 
                               int doneProg = (int) (((float) (i + 1) / licenses.size()) * 100);
@@ -1283,7 +1358,7 @@ jobs:
                               });
 
                               if (i < licenses.size() - 1 && !stopRequested.get()) {
-                                  Thread.sleep(650);
+                                  Thread.sleep(500);
                               }
                           }
 
@@ -1328,10 +1403,9 @@ jobs:
                   try {
                       // ۱. دریافت اطلاعات لایسنس از سرور
                       String licUrl = LICENSE_API_BASE + URLEncoder.encode(licenseKey, "UTF-8");
-                      HttpResult licHttp = executeHttpGet(licUrl, primaryProxy, null);
+                      HttpResult licHttp = executeSmartHttpGet(licUrl, primaryProxy, null);
                       if ((licHttp.statusCode != 200 || licHttp.body == null) && primaryProxy != null) {
-                          // تلاش مستقیم برای سرور لایسنس در صورت محدودیت پروکسی
-                          licHttp = executeHttpGet(licUrl, null, null);
+                          licHttp = executeSmartHttpGet(licUrl, null, null);
                       }
 
                       if (licHttp.body == null || licHttp.body.isEmpty()) {
@@ -1357,89 +1431,114 @@ jobs:
                       result.phone = meta.get("phone") != null ? meta.get("phone") : "";
                       result.userId = meta.get("userId") != null ? meta.get("userId") : "";
 
-                      String cookieHeader = buildCompleteCookieHeader(cookiesRaw, localStorageRaw);
-                      String accessToken = meta.get("accessToken");
+                      // نکته حیاتی: ساخت هدر کوکی تپسی با حذف کامل توکن Cerberus سوپرمارکت (رفع قطعی خطای 403)
+                      String cabCookieHeader = buildCleanCabCookieHeader(cookiesRaw, localStorageRaw);
+                      String cabAccessToken = meta.get("cabAccessToken");
+                      String existingSessionId = meta.get("globalId");
 
                       // ۲. درخواست لیست تخفیف‌ها از مرکز تخفیف سوپراپ تپسی
                       ProxyConfig activeProxy = primaryProxy;
-                      HttpResult discHttp = fetchDiscountsFromTapsi(cookieHeader, accessToken, activeProxy);
+                      HttpResult discHttp = fetchDiscountsFromTapsi(cabCookieHeader, cabAccessToken, activeProxy);
 
                       if ((discHttp.body == null || discHttp.statusCode != 200) && activeProxy != null) {
                           if (allProxies != null && allProxies.size() > 1) {
                               ProxyConfig backup = allProxies.get((proxyCursor++) % allProxies.size());
                               activeProxy = backup;
                               result.proxyUsed = backup.getDisplayLabel();
-                              discHttp = fetchDiscountsFromTapsi(cookieHeader, accessToken, activeProxy);
+                              discHttp = fetchDiscountsFromTapsi(cabCookieHeader, cabAccessToken, activeProxy);
                           }
                           if (discHttp.body == null || discHttp.statusCode != 200) {
                               activeProxy = null;
                               result.proxyUsed = "مستقیم (جایگزین پروکسی)";
-                              discHttp = fetchDiscountsFromTapsi(cookieHeader, accessToken, null);
+                              discHttp = fetchDiscountsFromTapsi(cabCookieHeader, cabAccessToken, null);
                           }
                       }
 
-                      String validDiscountsBody = (discHttp.statusCode == 200 && discHttp.body != null && discHttp.body.contains("discounts"))
+                      String validDiscountsBody = (discHttp.statusCode == 200 && discHttp.body != null &&
+                              (discHttp.body.contains("\"discounts\"") || discHttp.body.contains("\"categories\"")))
                               ? discHttp.body : null;
 
-                      // ۳. در صورت انقضای کوکی (401/403)، تازه‌سازی نشست با WebView
+                      // ۳. در صورت انقضای کوکی تپسی، تازه‌سازی نشست با مرورگر داخلی (SSO)
                       if (validDiscountsBody == null && allowWvFallback) {
-                          appendLog("   🔄 تلاش با مرورگر پشتیبان برای تازه‌سازی نشست...");
-                          validDiscountsBody = fetchDiscountsViaWebViewFallback(licenseKey, cookiesRaw, localStorageRaw);
-                      }
-
-                      if (validDiscountsBody == null) {
-                          result.success = false;
-                          result.errorMessage = (discHttp.statusCode == 401 || discHttp.statusCode == 403)
-                                  ? "نشست لایسنس منقضی شده است (کد " + discHttp.statusCode + ")"
-                                  : "عدم دریافت پاسخ معتبر از سرور تخفیف تپسی";
-                          return result;
-                      }
-
-                      // ۴. پردازش دسته‌بندی‌ها و آیتم‌های تخفیف
-                      JSONObject discRoot = new JSONObject(validDiscountsBody);
-                      Map<String, String> dynamicCats = new HashMap<>();
-                      JSONArray catsArr = discRoot.optJSONArray("categories");
-                      if (catsArr != null) {
-                          for (int c = 0; c < catsArr.length(); c++) {
-                              JSONObject cObj = catsArr.optJSONObject(c);
-                              if (cObj != null) {
-                                  String k = cObj.optString("key", "").trim();
-                                  String t = cObj.optString("text", "").trim();
-                                  if (!k.isEmpty() && !t.isEmpty()) {
-                                      dynamicCats.put(k.toUpperCase(Locale.ROOT), t);
+                          appendLog("   🔄 در حال تازه‌سازی نشست تپسی از طریق SSO و استخراج تخفیف‌ها...");
+                          validDiscountsBody = fetchDiscountsViaWebViewFallback(
+                                  licenseKey,
+                                  cookiesRaw,
+                                  localStorageRaw,
+                                  existingSessionId
+                          );
+                          if (validDiscountsBody != null) {
+                              result.proxyUsed = "مرورگر داخلی (SSO)";
+                              // دریافت کوکی تازه‌شده از WebView برای درخواست‌های بعدی همین اکانت
+                              String refreshedCabCookies = CookieManager.getInstance().getCookie("https://api.tapsi.cab");
+                              if (refreshedCabCookies != null && !refreshedCabCookies.isEmpty()) {
+                                  cabCookieHeader = refreshedCabCookies;
+                              }
+                          } else {
+                              // اگر WebView کوکی را تازه کرده باشد، یک بار دیگر با کوکی جدید تست می‌کنیم
+                              String refreshedCabCookies = CookieManager.getInstance().getCookie("https://api.tapsi.cab");
+                              if (refreshedCabCookies != null && !refreshedCabCookies.isEmpty()) {
+                                  HttpResult retryHttp = fetchDiscountsFromTapsi(refreshedCabCookies, null, null);
+                                  if (retryHttp.statusCode == 200 && retryHttp.body != null && retryHttp.body.contains("\"discounts\"")) {
+                                      validDiscountsBody = retryHttp.body;
+                                      result.proxyUsed = "تازه‌سازی کوکی (SSO)";
                                   }
                               }
                           }
                       }
 
-                      JSONArray discountsArr = discRoot.optJSONArray("discounts");
-                      if (discountsArr != null) {
-                          for (int d = 0; d < discountsArr.length(); d++) {
-                              JSONObject dObj = discountsArr.optJSONObject(d);
-                              if (dObj == null) continue;
-                              result.discounts.add(parseDiscountItem(dObj, dynamicCats));
+                      boolean anySourceSucceeded = false;
+
+                      // ۴. پردازش دسته‌بندی‌ها و آیتم‌های تخفیف سوپراپ تپسی
+                      if (validDiscountsBody != null) {
+                          anySourceSucceeded = true;
+                          JSONObject discRoot = new JSONObject(validDiscountsBody);
+                          Map<String, String> dynamicCats = new HashMap<>();
+                          JSONArray catsArr = discRoot.optJSONArray("categories");
+                          if (catsArr != null) {
+                              for (int c = 0; c < catsArr.length(); c++) {
+                                  JSONObject cObj = catsArr.optJSONObject(c);
+                                  if (cObj != null) {
+                                      String k = cObj.optString("key", "").trim();
+                                      String t = cObj.optString("text", "").trim();
+                                      if (!k.isEmpty() && !t.isEmpty()) {
+                                          dynamicCats.put(k.toUpperCase(Locale.ROOT), t);
+                                      }
+                                  }
+                              }
+                          }
+
+                          JSONArray discountsArr = discRoot.optJSONArray("discounts");
+                          if (discountsArr != null) {
+                              for (int d = 0; d < discountsArr.length(); d++) {
+                                  JSONObject dObj = discountsArr.optJSONObject(d);
+                                  if (dObj == null) continue;
+                                  result.discounts.add(parseDiscountItem(dObj, dynamicCats));
+                              }
                           }
                       }
 
                       // ۵. بررسی مأموریت فعال تپسی (passengerQuest)
-                      try {
-                          HttpResult questHttp = executeHttpGet(
-                                  PASSENGER_QUEST_API,
-                                  activeProxy,
-                                  buildTapsiHeaders(cookieHeader, accessToken)
-                          );
-                          if (questHttp.statusCode == 200 && questHttp.body != null && questHttp.body.startsWith("{")) {
-                              JSONObject qObj = new JSONObject(questHttp.body);
-                              String qTitle = qObj.optString("title", "").trim();
-                              String qScore = qObj.optString("score", "0").trim();
-                              String qTarget = qObj.optString("target", "0").trim();
-                              if (!qTitle.isEmpty() && !"0".equals(qTarget)) {
-                                  result.questSummary = qTitle + " (پیشرفت: " + qScore + " از " + qTarget + ")";
+                      if (anySourceSucceeded) {
+                          try {
+                              HttpResult questHttp = executeSmartHttpGet(
+                                      PASSENGER_QUEST_API,
+                                      activeProxy,
+                                      buildTapsiHeaders(cabCookieHeader, cabAccessToken)
+                              );
+                              if (questHttp.statusCode == 200 && questHttp.body != null && questHttp.body.startsWith("{")) {
+                                  JSONObject qObj = new JSONObject(questHttp.body);
+                                  String qTitle = qObj.optString("title", "").trim();
+                                  String qScore = qObj.optString("score", "0").trim();
+                                  String qTarget = qObj.optString("target", "0").trim();
+                                  if (!qTitle.isEmpty() && !"0".equals(qTarget)) {
+                                      result.questSummary = qTitle + " (پیشرفت: " + qScore + " از " + qTarget + ")";
+                                  }
                               }
-                          }
-                      } catch (Exception ignored) {}
+                          } catch (Exception ignored) {}
+                      }
 
-                      // ۶. بررسی تخفیف‌های اختصاصی تپسی مارکت در صورت وجود توکن مارکت
+                      // ۶. بررسی تخفیف‌های اختصاصی تپسی مارکت (همیشه اجرا می‌شود حتی اگر کوکی تاکسی منقضی باشد!)
                       String marketJwt = meta.get("marketJwt");
                       String cerberusId = meta.get("cerberusId");
                       if (marketJwt != null && !marketJwt.isEmpty() && cerberusId != null && !cerberusId.isEmpty()) {
@@ -1452,12 +1551,13 @@ jobs:
                               mktHeaders.put("User-Agent", DEFAULT_USER_AGENT);
                               mktHeaders.put("Authorization", "Bearer " + marketJwt);
 
-                              HttpResult mktHttp = executeHttpGet(
-                                      TAPSI_MARKET_GATEWAY + "/api/discount/v1/discounts/customer/" + cerberusId,
-                                      activeProxy,
-                                      mktHeaders
-                              );
+                              String mktDiscUrl = TAPSI_MARKET_GATEWAY + "/api/discount/v1/discounts/customer/" + cerberusId;
+                              HttpResult mktHttp = executeSmartHttpGet(mktDiscUrl, activeProxy, mktHeaders);
+                              if ((mktHttp.statusCode != 200 || mktHttp.body == null) && activeProxy != null) {
+                                  mktHttp = executeSmartHttpGet(mktDiscUrl, null, mktHeaders);
+                              }
                               if (mktHttp.statusCode == 200 && mktHttp.body != null && mktHttp.body.startsWith("{")) {
+                                  anySourceSucceeded = true;
                                   JSONObject mktObj = new JSONObject(mktHttp.body);
                                   JSONArray mktData = mktObj.optJSONArray("data");
                                   if (mktData != null) {
@@ -1480,6 +1580,14 @@ jobs:
                                   }
                               }
                           } catch (Exception ignored) {}
+                      }
+
+                      if (!anySourceSucceeded) {
+                          result.success = false;
+                          result.errorMessage = (discHttp.statusCode == 401 || discHttp.statusCode == 403)
+                                  ? "عدم دسترسی (کد " + discHttp.statusCode + " - اگر VPN روشن است خاموش کنید یا پروکسی ایران وارد نمایید)"
+                                  : "عدم دریافت پاسخ از سرور تپسی";
+                          return result;
                       }
 
                       result.success = true;
@@ -1561,76 +1669,69 @@ jobs:
               }
 
               // ==========================================
-              // ارتباط شبکه با پشتیبانی کامل از انواع پروکسی
+              // موتور شبکه و تانل مستقیم سوکت (پشتیبانی ۱۰۰٪ از پروکسی‌های دارای یوزر و پسورد)
               // ==========================================
               private static class HttpResult {
                   int statusCode;
                   String body;
               }
 
-              private Map<String, String> buildTapsiHeaders(String cookieHeader, String accessToken) {
+              private Map<String, String> buildTapsiHeaders(String cookieHeader, String cabAccessToken) {
                   Map<String, String> h = new LinkedHashMap<>();
                   h.put("Accept", "application/json, text/plain, */*");
                   h.put("Content-Type", "application/json");
                   h.put("Origin", "https://app.tapsi.cab");
                   h.put("Referer", "https://app.tapsi.cab/discount-center/");
-                  h.put("x-agent", "v2.2|passenger|WEBAPP|7.81.0|5.0");
+                  h.put("Sec-Fetch-Dest", "empty");
+                  h.put("Sec-Fetch-Mode", "cors");
+                  h.put("Sec-Fetch-Site", "same-site");
                   h.put("User-Agent", DEFAULT_USER_AGENT);
                   if (cookieHeader != null && !cookieHeader.isEmpty()) {
                       h.put("Cookie", cookieHeader);
                   }
-                  if (accessToken != null && !accessToken.isEmpty()) {
-                      h.put("Authorization", accessToken.startsWith("Bearer ") ? accessToken : "Bearer " + accessToken);
+                  if (cabAccessToken != null && !cabAccessToken.isEmpty()) {
+                      h.put("Authorization", cabAccessToken.startsWith("Bearer ") ? cabAccessToken : "Bearer " + cabAccessToken);
                   }
                   return h;
               }
 
-              private HttpResult fetchDiscountsFromTapsi(String cookieHeader, String accessToken, ProxyConfig proxy) {
-                  HttpResult r1 = executeHttpGet(DISCOUNT_CENTER_API, proxy, buildTapsiHeaders(cookieHeader, null));
-                  if (r1.statusCode == 200 && r1.body != null && r1.body.contains("discounts")) {
+              private HttpResult fetchDiscountsFromTapsi(String cookieHeader, String cabAccessToken, ProxyConfig proxy) {
+                  HttpResult r1 = executeSmartHttpGet(DISCOUNT_CENTER_API, proxy, buildTapsiHeaders(cookieHeader, null));
+                  if (r1.statusCode == 200 && r1.body != null && (r1.body.contains("\"discounts\"") || r1.body.contains("\"categories\""))) {
                       return r1;
                   }
-                  if (accessToken != null && !accessToken.isEmpty()) {
-                      HttpResult r2 = executeHttpGet(DISCOUNT_CENTER_API, proxy, buildTapsiHeaders(cookieHeader, accessToken));
-                      if (r2.statusCode == 200 && r2.body != null && r2.body.contains("discounts")) {
+                  if (cabAccessToken != null && !cabAccessToken.isEmpty()) {
+                      HttpResult r2 = executeSmartHttpGet(DISCOUNT_CENTER_API, proxy, buildTapsiHeaders(cookieHeader, cabAccessToken));
+                      if (r2.statusCode == 200 && r2.body != null && (r2.body.contains("\"discounts\"") || r2.body.contains("\"categories\""))) {
                           return r2;
                       }
                   }
                   return r1;
               }
 
-              private HttpResult executeHttpGet(String urlStr, final ProxyConfig proxyCfg, Map<String, String> headers) {
+              /**
+               * اگر پروکسی فعال باشد، از تانل مستقیم سوکت (Raw Socket Tunnel + SSLSocket) استفاده می‌کند
+               * تا هدر Proxy-Authorization در لحظه CONNECT و احراز هویت SOCKS5 بدون باگ اندروید ارسال شود.
+               */
+              private HttpResult executeSmartHttpGet(String urlStr, ProxyConfig proxyCfg, Map<String, String> headers) {
+                  if (proxyCfg != null) {
+                      HttpResult tunneled = executeProxiedSocketGet(urlStr, proxyCfg, headers);
+                      if (tunneled.statusCode > 0 && tunneled.body != null) {
+                          return tunneled;
+                      }
+                  }
+                  return executeDirectHttpGet(urlStr, headers);
+              }
+
+              private HttpResult executeDirectHttpGet(String urlStr, Map<String, String> headers) {
                   HttpResult res = new HttpResult();
                   HttpURLConnection conn = null;
                   try {
                       URL url = new URL(urlStr);
-                      if (proxyCfg != null) {
-                          Proxy.Type type = proxyCfg.isSocks() ? Proxy.Type.SOCKS : Proxy.Type.HTTP;
-                          Proxy proxy = new Proxy(type, new InetSocketAddress(proxyCfg.host, proxyCfg.port));
-                          if (proxyCfg.hasAuth()) {
-                              Authenticator.setDefault(new Authenticator() {
-                                  @Override
-                                  protected PasswordAuthentication getPasswordAuthentication() {
-                                      return new PasswordAuthentication(
-                                              proxyCfg.username,
-                                              proxyCfg.password.toCharArray()
-                                      );
-                                  }
-                              });
-                          }
-                          conn = (HttpURLConnection) url.openConnection(proxy);
-                          if (proxyCfg.hasAuth()) {
-                              String cred = proxyCfg.username + ":" + proxyCfg.password;
-                              String encoded = Base64.encodeToString(cred.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                              conn.setRequestProperty("Proxy-Authorization", "Basic " + encoded);
-                          }
-                      } else {
-                          conn = (HttpURLConnection) url.openConnection();
-                      }
-
+                      conn = (HttpURLConnection) url.openConnection();
                       conn.setRequestMethod("GET");
-                      conn.setConnectTimeout(15000);
-                      conn.setReadTimeout(15000);
+                      conn.setConnectTimeout(12000);
+                      conn.setReadTimeout(12000);
                       conn.setInstanceFollowRedirects(true);
 
                       if (headers != null) {
@@ -1663,11 +1764,300 @@ jobs:
                   return res;
               }
 
-              private String fetchDiscountsViaWebViewFallback(String licenseKey, String cookiesRaw, String localStorageRaw) {
+              private HttpResult executeProxiedSocketGet(String urlStr, ProxyConfig proxy, Map<String, String> headers) {
+                  HttpResult res = new HttpResult();
+                  Socket rawSocket = null;
+                  Socket activeSocket = null;
+                  try {
+                      URL url = new URL(urlStr);
+                      String targetHost = url.getHost();
+                      boolean isHttps = "https".equalsIgnoreCase(url.getProtocol());
+                      int targetPort = url.getPort() > 0 ? url.getPort() : (isHttps ? 443 : 80);
+                      String pathAndQuery = url.getFile() != null && !url.getFile().isEmpty() ? url.getFile() : "/";
+
+                      rawSocket = new Socket();
+                      rawSocket.connect(new InetSocketAddress(proxy.host, proxy.port), 10000);
+                      rawSocket.setSoTimeout(12000);
+
+                      if (proxy.isSocks5()) {
+                          performSocks5Handshake(rawSocket, targetHost, targetPort, proxy.username, proxy.password);
+                      } else if (proxy.isSocks4()) {
+                          performSocks4Handshake(rawSocket, targetHost, targetPort, proxy.username);
+                      } else {
+                          // HTTP / HTTPS CONNECT tunnel with immediate Proxy-Authorization header
+                          performHttpConnectHandshake(rawSocket, targetHost, targetPort, proxy.username, proxy.password);
+                      }
+
+                      if (isHttps) {
+                          SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+                          SSLSocket sslSocket = (SSLSocket) factory.createSocket(rawSocket, targetHost, targetPort, true);
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                              SSLParameters params = sslSocket.getSSLParameters();
+                              params.setServerNames(Arrays.asList(new SNIHostName(targetHost)));
+                              sslSocket.setSSLParameters(params);
+                          }
+                          sslSocket.startHandshake();
+                          activeSocket = sslSocket;
+                      } else {
+                          activeSocket = rawSocket;
+                      }
+
+                      StringBuilder req = new StringBuilder();
+                      req.append("GET ").append(pathAndQuery).append(" HTTP/1.1\r\n");
+                      req.append("Host: ").append(targetHost).append("\r\n");
+                      req.append("Connection: close\r\n");
+                      if (headers != null) {
+                          for (Map.Entry<String, String> e : headers.entrySet()) {
+                              req.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
+                          }
+                      } else {
+                          req.append("User-Agent: ").append(DEFAULT_USER_AGENT).append("\r\n");
+                          req.append("Accept: application/json\r\n");
+                      }
+                      req.append("\r\n");
+
+                      OutputStream out = activeSocket.getOutputStream();
+                      out.write(req.toString().getBytes(StandardCharsets.UTF_8));
+                      out.flush();
+
+                      InputStream in = activeSocket.getInputStream();
+                      String statusLine = readAsciiLine(in);
+                      if (statusLine == null || !statusLine.startsWith("HTTP/")) {
+                          res.statusCode = -1;
+                          return res;
+                      }
+                      String[] statusParts = statusLine.split(" ");
+                      if (statusParts.length >= 2) {
+                          res.statusCode = Integer.parseInt(statusParts[1].trim());
+                      }
+
+                      boolean isChunked = false;
+                      boolean isGzip = false;
+                      String hdrLine;
+                      while ((hdrLine = readAsciiLine(in)) != null && !hdrLine.isEmpty()) {
+                          String lower = hdrLine.toLowerCase(Locale.ROOT);
+                          if (lower.startsWith("transfer-encoding:") && lower.contains("chunked")) {
+                              isChunked = true;
+                          } else if (lower.startsWith("content-encoding:") && lower.contains("gzip")) {
+                              isGzip = true;
+                          }
+                      }
+
+                      byte[] bodyBytes = isChunked ? readChunkedBody(in) : readAllBytes(in);
+                      if (isGzip && bodyBytes.length > 0) {
+                          bodyBytes = decompressGzip(bodyBytes);
+                      }
+                      res.body = new String(bodyBytes, StandardCharsets.UTF_8).trim();
+                      return res;
+
+                  } catch (Exception e) {
+                      res.statusCode = -1;
+                      res.body = null;
+                      return res;
+                  } finally {
+                      try { if (activeSocket != null) activeSocket.close(); } catch (Exception ignored) {}
+                      try { if (rawSocket != null) rawSocket.close(); } catch (Exception ignored) {}
+                  }
+              }
+
+              private void performHttpConnectHandshake(Socket sock, String host, int port, String user, String pass) throws IOException {
+                  StringBuilder connectReq = new StringBuilder();
+                  connectReq.append("CONNECT ").append(host).append(":").append(port).append(" HTTP/1.1\r\n");
+                  connectReq.append("Host: ").append(host).append(":").append(port).append("\r\n");
+                  connectReq.append("Proxy-Connection: Keep-Alive\r\n");
+                  connectReq.append("User-Agent: ").append(DEFAULT_USER_AGENT).append("\r\n");
+                  if (user != null && !user.isEmpty() && pass != null) {
+                      String cred = user + ":" + pass;
+                      String b64 = Base64.encodeToString(cred.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                      connectReq.append("Proxy-Authorization: Basic ").append(b64).append("\r\n");
+                  }
+                  connectReq.append("\r\n");
+
+                  OutputStream out = sock.getOutputStream();
+                  out.write(connectReq.toString().getBytes(StandardCharsets.UTF_8));
+                  out.flush();
+
+                  InputStream in = sock.getInputStream();
+                  String statusLine = readAsciiLine(in);
+                  if (statusLine == null || !statusLine.contains(" 200")) {
+                      throw new IOException("Proxy CONNECT failed: " + statusLine);
+                  }
+                  String line;
+                  while ((line = readAsciiLine(in)) != null && !line.isEmpty()) {
+                      // Drain proxy response headers
+                  }
+              }
+
+              private void performSocks5Handshake(Socket sock, String host, int port, String user, String pass) throws IOException {
+                  OutputStream out = sock.getOutputStream();
+                  DataInputStream in = new DataInputStream(sock.getInputStream());
+
+                  boolean hasAuth = user != null && !user.isEmpty() && pass != null;
+                  if (hasAuth) {
+                      out.write(new byte[]{0x05, 0x02, 0x00, 0x02});
+                  } else {
+                      out.write(new byte[]{0x05, 0x01, 0x00});
+                  }
+                  out.flush();
+
+                  int ver = in.readUnsignedByte();
+                  int method = in.readUnsignedByte();
+                  if (ver != 0x05) throw new IOException("Invalid SOCKS5 version");
+
+                  if (method == 0x02) {
+                      byte[] uBytes = (user != null ? user : "").getBytes(StandardCharsets.UTF_8);
+                      byte[] pBytes = (pass != null ? pass : "").getBytes(StandardCharsets.UTF_8);
+                      ByteArrayOutputStream authBuf = new ByteArrayOutputStream();
+                      authBuf.write(0x01);
+                      authBuf.write(uBytes.length);
+                      authBuf.write(uBytes);
+                      authBuf.write(pBytes.length);
+                      authBuf.write(pBytes);
+                      out.write(authBuf.toByteArray());
+                      out.flush();
+
+                      in.readUnsignedByte();
+                      int authStatus = in.readUnsignedByte();
+                      if (authStatus != 0x00) throw new IOException("SOCKS5 auth failed");
+                  } else if (method != 0x00) {
+                      throw new IOException("Unsupported SOCKS5 auth method");
+                  }
+
+                  byte[] hostBytes = host.getBytes(StandardCharsets.UTF_8);
+                  ByteArrayOutputStream req = new ByteArrayOutputStream();
+                  req.write(0x05);
+                  req.write(0x01); // CONNECT
+                  req.write(0x00);
+                  req.write(0x03); // DOMAINNAME
+                  req.write(hostBytes.length);
+                  req.write(hostBytes);
+                  req.write((port >> 8) & 0xFF);
+                  req.write(port & 0xFF);
+                  out.write(req.toByteArray());
+                  out.flush();
+
+                  in.readUnsignedByte();
+                  int rep = in.readUnsignedByte();
+                  in.readUnsignedByte();
+                  int atyp = in.readUnsignedByte();
+                  if (rep != 0x00) throw new IOException("SOCKS5 connect failed: " + rep);
+
+                  if (atyp == 0x01) {
+                      in.readFully(new byte[4]);
+                  } else if (atyp == 0x03) {
+                      int len = in.readUnsignedByte();
+                      in.readFully(new byte[len]);
+                  } else if (atyp == 0x04) {
+                      in.readFully(new byte[16]);
+                  }
+                  in.readFully(new byte[2]);
+              }
+
+              private void performSocks4Handshake(Socket sock, String host, int port, String user) throws IOException {
+                  OutputStream out = sock.getOutputStream();
+                  DataInputStream in = new DataInputStream(sock.getInputStream());
+
+                  byte[] hostBytes = host.getBytes(StandardCharsets.UTF_8);
+                  byte[] userBytes = (user != null ? user : "").getBytes(StandardCharsets.UTF_8);
+
+                  ByteArrayOutputStream req = new ByteArrayOutputStream();
+                  req.write(0x04);
+                  req.write(0x01);
+                  req.write((port >> 8) & 0xFF);
+                  req.write(port & 0xFF);
+                  // SOCKS4a magic IP 0.0.0.1
+                  req.write(new byte[]{0x00, 0x00, 0x00, 0x01});
+                  req.write(userBytes);
+                  req.write(0x00);
+                  req.write(hostBytes);
+                  req.write(0x00);
+                  out.write(req.toByteArray());
+                  out.flush();
+
+                  byte[] resp = new byte[8];
+                  in.readFully(resp);
+                  if (resp[1] != 0x5A) {
+                      throw new IOException("SOCKS4 connect rejected");
+                  }
+              }
+
+              private String readAsciiLine(InputStream in) throws IOException {
+                  ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                  int b;
+                  boolean readAny = false;
+                  while ((b = in.read()) != -1) {
+                      readAny = true;
+                      if (b == '\n') break;
+                      if (b != '\r') buf.write(b);
+                  }
+                  if (!readAny && buf.size() == 0) return null;
+                  return new String(buf.toByteArray(), StandardCharsets.UTF_8);
+              }
+
+              private byte[] readChunkedBody(InputStream in) throws IOException {
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  while (true) {
+                      String sizeLine = readAsciiLine(in);
+                      if (sizeLine == null) break;
+                      int semi = sizeLine.indexOf(';');
+                      if (semi > 0) sizeLine = sizeLine.substring(0, semi);
+                      sizeLine = sizeLine.trim();
+                      if (sizeLine.isEmpty()) continue;
+                      int chunkSize;
+                      try {
+                          chunkSize = Integer.parseInt(sizeLine, 16);
+                      } catch (Exception e) {
+                          break;
+                      }
+                      if (chunkSize <= 0) {
+                          readAsciiLine(in);
+                          break;
+                      }
+                      byte[] buf = new byte[chunkSize];
+                      int total = 0;
+                      while (total < chunkSize) {
+                          int r = in.read(buf, total, chunkSize - total);
+                          if (r == -1) break;
+                          total += r;
+                      }
+                      out.write(buf, 0, total);
+                      readAsciiLine(in);
+                  }
+                  return out.toByteArray();
+              }
+
+              private byte[] readAllBytes(InputStream in) throws IOException {
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  byte[] buf = new byte[4096];
+                  int r;
+                  while ((r = in.read(buf)) != -1) {
+                      out.write(buf, 0, r);
+                  }
+                  return out.toByteArray();
+              }
+
+              private byte[] decompressGzip(byte[] compressed) {
+                  try (GZIPInputStream gis = new GZIPInputStream(new java.io.ByteArrayInputStream(compressed))) {
+                      return readAllBytes(gis);
+                  } catch (Exception e) {
+                      return compressed;
+                  }
+              }
+
+              // ==========================================
+              // مرورگر پشتیبان و جداسازی هوشمند کوکی‌های تپسی از سوپرمارکت
+              // ==========================================
+              private String fetchDiscountsViaWebViewFallback(
+                      String licenseKey,
+                      String cookiesRaw,
+                      String localStorageRaw,
+                      String existingSessionId
+              ) {
                   try {
                       capturedDiscountsJson = null;
                       activeStepId = "wv_" + System.currentTimeMillis();
-                      activeLocalStorageRaw = localStorageRaw != null ? localStorageRaw : "{}";
+                      activeLocalStorageRaw = sanitizeLocalStorageForCab(localStorageRaw);
+                      activeExistingSessionId = existingSessionId != null ? existingSessionId : "";
                       webViewLatch = new CountDownLatch(1);
 
                       CountDownLatch initLatch = new CountDownLatch(1);
@@ -1676,7 +2066,7 @@ jobs:
                               WebStorage.getInstance().deleteAllData();
                               CookieManager cm = CookieManager.getInstance();
                               cm.removeAllCookies(v -> {
-                                  setCookiesForAllDomains(cm, cookiesRaw);
+                                  setSmartCookiesForWebView(cm, cookiesRaw);
                                   cm.flush();
                                   webView.clearCache(true);
                                   webView.loadUrl("https://app.tapsi.cab/discount-center/");
@@ -1688,29 +2078,48 @@ jobs:
                       });
 
                       initLatch.await(5, TimeUnit.SECONDS);
-                      webViewLatch.await(12, TimeUnit.SECONDS);
+                      webViewLatch.await(15, TimeUnit.SECONDS);
                       return capturedDiscountsJson;
                   } catch (Exception e) {
                       return null;
                   }
               }
 
-              private void setCookiesForAllDomains(CookieManager cm, String rawCookies) {
+              private void setSmartCookiesForWebView(CookieManager cm, String rawCookies) {
                   if (rawCookies == null || rawCookies.trim().isEmpty()) return;
-                  String[] parts = rawCookies.split(";");
-                  for (String domain : TARGET_DOMAINS) {
-                      String host = domain.startsWith(".") ? domain.substring(1) : domain;
-                      String url = "https://" + host;
-                      for (String part : parts) {
-                          String trimmed = part.trim();
-                          if (trimmed.isEmpty()) continue;
-                          int eq = trimmed.indexOf('=');
-                          if (eq <= 0) continue;
-                          String name = trimmed.substring(0, eq).trim();
-                          String val = trimmed.substring(eq + 1).trim();
-                          if (RESERVED_COOKIE_ATTRS.contains(name.toLowerCase(Locale.ROOT))) continue;
-                          cm.setCookie(url, name + "=" + val + "; Domain=" + domain + "; Path=/; Secure");
+
+                  Map<String, String> cabCookies = new LinkedHashMap<>();
+                  Map<String, String> irCookies = new LinkedHashMap<>();
+                  Map<String, String> mktCookies = new LinkedHashMap<>();
+
+                  for (String part : rawCookies.split(";")) {
+                      String trimmed = part.trim();
+                      if (trimmed.isEmpty()) continue;
+                      int eq = trimmed.indexOf('=');
+                      if (eq <= 0) continue;
+                      String name = trimmed.substring(0, eq).trim();
+                      String val = trimmed.substring(eq + 1).trim();
+                      if (RESERVED_COOKIE_ATTRS.contains(name.toLowerCase(Locale.ROOT))) continue;
+
+                      if (isCerberusMarketJwt(val)) {
+                          mktCookies.put(name, val);
+                      } else {
+                          // اولین مقدار برای .tapsi.cab حفظ می‌شود تا کوکی‌های بعدی روی آن بازنویسی نشوند
+                          if (!cabCookies.containsKey(name)) {
+                              cabCookies.put(name, val);
+                          }
+                          irCookies.put(name, val);
                       }
+                  }
+
+                  for (Map.Entry<String, String> e : cabCookies.entrySet()) {
+                      cm.setCookie("https://tapsi.cab", e.getKey() + "=" + e.getValue() + "; Domain=.tapsi.cab; Path=/; Secure");
+                  }
+                  for (Map.Entry<String, String> e : irCookies.entrySet()) {
+                      cm.setCookie("https://tapsi.ir", e.getKey() + "=" + e.getValue() + "; Domain=.tapsi.ir; Path=/; Secure");
+                  }
+                  for (Map.Entry<String, String> e : mktCookies.entrySet()) {
+                      cm.setCookie("https://tapsi.markets", e.getKey() + "=" + e.getValue() + "; Domain=.tapsi.markets; Path=/; Secure");
                   }
               }
 
@@ -1773,7 +2182,7 @@ jobs:
                                   .append(!acc.userId.isEmpty() ? " (ID: " + acc.userId + ")" : "")
                                   .append("\n");
                       }
-                      sb.append("🌐 پروکسی استفاده‌شده: ").append(acc.proxyUsed).append("\n");
+                      sb.append("🌐 روش / پروکسی     : ").append(acc.proxyUsed).append("\n");
 
                       List<DiscountItemModel> matching = new ArrayList<>();
                       for (DiscountItemModel d : acc.discounts) {
@@ -1838,7 +2247,6 @@ jobs:
                   pendingReportToSave = buildFormattedTxtReport();
                   String fileName = "Tapsi_Discounts_" + System.currentTimeMillis() + ".txt";
 
-                  // ۱. ذخیره مستقیم در پوشه Downloads
                   try {
                       File dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                       if (dlDir != null) {
@@ -1853,10 +2261,8 @@ jobs:
                       }
                   } catch (Exception ignored) {}
 
-                  // ۲. کپی در کلیپ‌بورد
                   copyToClipboard("Tapsi_Discounts_Report", pendingReportToSave);
 
-                  // ۳. باز کردن پنجره انتخاب مسیر ذخیره اندروید (Save As) در صورت درخواست
                   if (openSystemFilePicker && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                       try {
                           Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -1928,7 +2334,6 @@ jobs:
                       );
                       cardLp.setMargins(0, 0, 0, dp(10));
 
-                      // ردیف بالای کارت: شماره لایسنس + دکمه کپی
                       LinearLayout topRow = new LinearLayout(this);
                       topRow.setOrientation(LinearLayout.HORIZONTAL);
                       topRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -1948,7 +2353,6 @@ jobs:
                       topRow.addView(copyLicBtn);
                       card.addView(topRow);
 
-                      // مشخصات اکانت و پروکسی
                       TextView metaView = new TextView(this);
                       metaView.setText("👤 " + (!acc.phone.isEmpty() ? acc.phone : "بدون شماره") +
                               (!acc.userId.isEmpty() ? " | کد: " + acc.userId : "") +
@@ -2068,8 +2472,43 @@ jobs:
               }
 
               // ==========================================
-              // توابع کمکی استخراج کوکی و توکن
+              // توابع کمکی جداسازی هوشمند کوکی و توکن
               // ==========================================
+              private boolean isCerberusMarketJwt(String val) {
+                  if (val == null) return false;
+                  String clean = val.startsWith("Bearer ") ? val.substring(7).trim() : val.trim();
+                  if (!clean.startsWith("eyJ")) return false;
+                  JSONObject payload = decodeJwtPayload(clean);
+                  if (payload == null) return false;
+                  String iss = payload.optString("iss", "").toLowerCase(Locale.ROOT);
+                  String tenant = payload.optString("tenant", "").toLowerCase(Locale.ROOT);
+                  String clientId = payload.optString("client_id", "").toLowerCase(Locale.ROOT);
+                  String cerberusId = payload.optString("cerberusId", "");
+                  return iss.contains("cerberus") || tenant.contains("tapsimarket")
+                          || clientId.contains("tapsi_customer") || !cerberusId.isEmpty();
+              }
+
+              private String sanitizeLocalStorageForCab(String localStorageRaw) {
+                  if (localStorageRaw == null || localStorageRaw.trim().isEmpty()) return "{}";
+                  try {
+                      JSONObject ls = new JSONObject(localStorageRaw);
+                      JSONObject cleaned = new JSONObject();
+                      JSONArray names = ls.names();
+                      if (names != null) {
+                          for (int i = 0; i < names.length(); i++) {
+                              String k = names.optString(i);
+                              String v = ls.optString(k, "");
+                              if (!isCerberusMarketJwt(v) && !v.contains("cerberus.membership") && !v.contains("TapsiMarket")) {
+                                  cleaned.put(k, ls.get(k));
+                              }
+                          }
+                      }
+                      return cleaned.toString();
+                  } catch (Exception e) {
+                      return "{}";
+                  }
+              }
+
               private List<String> parseLicensesList() {
                   String raw = licensesInput != null ? licensesInput.getText().toString() : "";
                   String[] parts = raw.split("[\\r\\n,;\\s]+");
@@ -2145,7 +2584,12 @@ jobs:
                   return "{}";
               }
 
-              private String buildCompleteCookieHeader(String rawCookies, String localStorageRaw) {
+              /**
+               * ساخت هدر کوکی مخصوص api.tapsi.cab:
+               * ۱. هر توکن مربوط به سوپرمارکت (Cerberus) را حذف می‌کند تا باعث خطای 403 در api.tapsi.cab نشود.
+               * ۲. اولین مقدار هر کوکی را نگه می‌دارد (چون کوکی‌های tapsi.cab در ابتدای رشته لایسنس هستند).
+               */
+              private String buildCleanCabCookieHeader(String rawCookies, String localStorageRaw) {
                   Map<String, String> map = new LinkedHashMap<>();
                   if (rawCookies != null) {
                       for (String part : rawCookies.split(";")) {
@@ -2154,7 +2598,9 @@ jobs:
                           if (eq > 0) {
                               String k = trimmed.substring(0, eq).trim();
                               String v = trimmed.substring(eq + 1).trim();
-                              if (!RESERVED_COOKIE_ATTRS.contains(k.toLowerCase(Locale.ROOT))) {
+                              if (RESERVED_COOKIE_ATTRS.contains(k.toLowerCase(Locale.ROOT))) continue;
+                              if (isCerberusMarketJwt(v)) continue;
+                              if (!map.containsKey(k)) {
                                   map.put(k, v);
                               }
                           }
@@ -2167,11 +2613,11 @@ jobs:
                           for (int i = 0; i < names.length(); i++) {
                               String k = names.optString(i);
                               String v = ls.optString(k, "").replace("\"", "").trim();
-                              if (("accessToken".equals(k) || "access_token".equals(k)) && !v.isEmpty() && !map.containsKey("accessToken")) {
+                              if (("accessToken".equals(k) || "access_token".equals(k))
+                                      && !v.isEmpty()
+                                      && !isCerberusMarketJwt(v)
+                                      && !map.containsKey("accessToken")) {
                                   map.put("accessToken", v);
-                              }
-                              if (("refreshToken".equals(k) || "refresh_token".equals(k)) && !v.isEmpty() && !map.containsKey("refreshToken")) {
-                                  map.put("refreshToken", v);
                               }
                           }
                       }
@@ -2189,9 +2635,10 @@ jobs:
                   String phone = dataObj.optString("phone_number", "");
                   if ("unknown".equalsIgnoreCase(phone)) phone = "";
                   String userId = "";
-                  String accessToken = "";
+                  String cabAccessToken = "";
                   String marketJwt = "";
                   String cerberusId = "";
+                  String globalId = "";
 
                   if (cookies != null) {
                       for (String part : cookies.split(";")) {
@@ -2200,8 +2647,10 @@ jobs:
                           if (eq > 0) {
                               String k = trimmed.substring(0, eq).trim();
                               String v = trimmed.substring(eq + 1).trim();
-                              if ("accessToken".equals(k) || "access_token".equals(k)) {
-                                  accessToken = v;
+                              if (("accessToken".equals(k) || "access_token".equals(k))
+                                      && !isCerberusMarketJwt(v)
+                                      && cabAccessToken.isEmpty()) {
+                                  cabAccessToken = v;
                               }
                           }
                       }
@@ -2218,20 +2667,25 @@ jobs:
                           if (phone.isEmpty() && !uname.isEmpty()) phone = uname;
                           String uid = payload.optString("userId", payload.optString("sub", ""));
                           if (userId.isEmpty() && !uid.isEmpty()) userId = uid;
-                          String cid = payload.optString("cerberusId", "");
-                          if (!cid.isEmpty()) {
-                              cerberusId = cid;
+                          String gid = payload.optString("globalId", "");
+                          if (globalId.isEmpty() && !gid.isEmpty()) globalId = gid;
+
+                          if (isCerberusMarketJwt(jwt)) {
                               marketJwt = jwt;
+                              String cid = payload.optString("cerberusId", "");
+                              if (!cid.isEmpty()) cerberusId = cid;
+                          } else if (cabAccessToken.isEmpty()) {
+                              cabAccessToken = jwt;
                           }
-                          if (accessToken.isEmpty()) accessToken = jwt;
                       }
                   }
 
                   meta.put("phone", phone);
                   meta.put("userId", userId);
-                  meta.put("accessToken", accessToken);
+                  meta.put("cabAccessToken", cabAccessToken);
                   meta.put("marketJwt", marketJwt);
                   meta.put("cerberusId", cerberusId);
+                  meta.put("globalId", globalId);
                   return meta;
               }
 
@@ -2265,7 +2719,9 @@ jobs:
                   Button btn = new Button(this);
                   btn.setText(text);
                   btn.setAllCaps(false);
-                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+                  btn.setSingleLine(true);
+                  btn.setEllipsize(TextUtils.TruncateAt.END);
+                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
                   btn.setTypeface(Typeface.DEFAULT_BOLD);
                   btn.setPadding(dp(4), 0, dp(4), 0);
                   styleTabButton(btn, active);
@@ -2338,9 +2794,12 @@ jobs:
                   Button btn = new Button(this);
                   btn.setText(text);
                   btn.setAllCaps(false);
+                  btn.setSingleLine(true);
+                  btn.setEllipsize(TextUtils.TruncateAt.END);
                   btn.setTextColor(Color.parseColor(textHex));
-                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+                  btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
                   btn.setTypeface(Typeface.DEFAULT_BOLD);
+                  btn.setPadding(dp(6), 0, dp(6), 0);
                   GradientDrawable bg = new GradientDrawable();
                   bg.setColor(Color.parseColor(bgHex));
                   bg.setCornerRadius(dp(10));
@@ -2353,6 +2812,7 @@ jobs:
                   Button btn = new Button(this);
                   btn.setText(text);
                   btn.setAllCaps(false);
+                  btn.setSingleLine(true);
                   btn.setTextColor(Color.parseColor(textHex));
                   btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
                   btn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -2433,19 +2893,19 @@ jobs:
 
       - name: Prepare Output APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Tapsi-Discount-Checker-v1.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Tapsi-Discount-Checker-v2.0.apk
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Tapsi-Discount-Checker-APK
-          path: Tapsi-Discount-Checker-v1.0.apk
+          path: Tapsi-Discount-Checker-v2.0.apk
 
       - name: Create GitHub Release (Optional Direct Download)
         uses: softprops/action-gh-release@v2
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "Tapsi Discount Checker APK (Build #${{ github.run_number }})"
-          files: Tapsi-Discount-Checker-v1.0.apk
+          tag_name: v2.0.${{ github.run_number }}
+          name: "Tapsi Discount Checker APK v2.0 (Build #${{ github.run_number }})"
+          files: Tapsi-Discount-Checker-v2.0.apk
