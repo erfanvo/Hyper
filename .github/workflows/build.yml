@@ -86,8 +86,8 @@ jobs:
                   applicationId "ir.hyperlink.snapp.extractor"
                   minSdk 23
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "2.1"
               }
 
               buildTypes {
@@ -272,17 +272,17 @@ jobs:
               private LinearLayout copyActionsRow;
               private Button copyLicenseBtn;
               private Button shareLicenseBtn;
-              private Button copyRawBtn;
               private Button extractBtn;
               private Button cleanBtn;
 
-              private JSONObject extractedDataCache = null;
               private String lastLicenseKey = null;
               private String lastDetectedPhone = "نامشخص";
 
               private boolean isFastMode = false;
               private boolean isAutoCopy = true;
               private String partnerCode = "";
+              private boolean isPartnerValid = false;
+              private int partnerRemaining = 0;
 
               private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -342,7 +342,7 @@ jobs:
                   statusBadge.setLayoutParams(badgeParams);
 
                   quotaBadgeView = new TextView(this);
-                  updateQuotaBadgeUI("🔑 ثبت کد اشتراک", COLOR_WARNING);
+                  updateQuotaBadgeUI("🔑 ثبت کد اشتراک (الزامی)", COLOR_WARNING);
                   quotaBadgeView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
                   quotaBadgeView.setTypeface(Typeface.DEFAULT_BOLD);
                   quotaBadgeView.setPadding(dp(10), dp(5), dp(10), dp(5));
@@ -413,7 +413,7 @@ jobs:
                   root.addView(progressBar);
 
                   // ==========================================
-                  // 3. بخش میانی: وب‌ویو + کارت شناور مدرن نتیجه
+                  // 3. بخش میانی: وب‌ویو + کارت شناور مدرن نتیجه (بدون دکمه کپی اطلاعات خام)
                   // ==========================================
                   FrameLayout centerContainer = new FrameLayout(this);
                   LinearLayout.LayoutParams centerParams = new LinearLayout.LayoutParams(
@@ -449,7 +449,7 @@ jobs:
                   cardHeader.setGravity(Gravity.CENTER_VERTICAL);
 
                   resultTitleView = new TextView(this);
-                  resultTitleView.setText("نتیجه استخراج");
+                  resultTitleView.setText("نتیجه صدور لایسنس");
                   resultTitleView.setTextColor(Color.parseColor(COLOR_TEXT_MAIN));
                   resultTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
                   resultTitleView.setTypeface(Typeface.DEFAULT_BOLD);
@@ -491,35 +491,28 @@ jobs:
                   licenseValueView.setLayoutParams(keyBoxParams);
                   resultCard.addView(licenseValueView);
 
+                  // فقط دکمه کپی لایسنس و اشتراک‌گذاری لایسنس (دکمه کپی اطلاعات خام حذف شد)
                   copyActionsRow = new LinearLayout(this);
                   copyActionsRow.setOrientation(LinearLayout.HORIZONTAL);
                   copyActionsRow.setLayoutParams(new LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-                  copyLicenseBtn = createActionButton("🔑 کپی لایسنس", COLOR_PRIMARY, COLOR_PRIMARY_DARK, null);
+                  copyLicenseBtn = createActionButton("🔑 کپی کلید لایسنس", COLOR_PRIMARY, COLOR_PRIMARY_DARK, null);
                   LinearLayout.LayoutParams copyLicParams = new LinearLayout.LayoutParams(
-                          0, dp(38), 1f);
-                  copyLicParams.setMargins(0, 0, dp(4), 0);
+                          0, dp(40), 1.2f);
+                  copyLicParams.setMargins(0, 0, dp(5), 0);
                   copyLicenseBtn.setLayoutParams(copyLicParams);
                   copyLicenseBtn.setOnClickListener(v -> copyLicenseKey());
 
-                  shareLicenseBtn = createActionButton("📤 اشتراک", COLOR_BG_CARD, COLOR_CYAN, COLOR_BORDER);
+                  shareLicenseBtn = createActionButton("📤 اشتراک‌گذاری لایسنس", COLOR_BG_CARD, COLOR_CYAN, COLOR_BORDER);
                   LinearLayout.LayoutParams shareParams = new LinearLayout.LayoutParams(
-                          0, dp(38), 0.85f);
-                  shareParams.setMargins(dp(4), 0, dp(4), 0);
+                          0, dp(40), 1f);
+                  shareParams.setMargins(dp(5), 0, 0, 0);
                   shareLicenseBtn.setLayoutParams(shareParams);
                   shareLicenseBtn.setOnClickListener(v -> shareSingleLicense());
 
-                  copyRawBtn = createActionButton("📋 JSON خام", COLOR_BG_CARD, COLOR_TEXT_MAIN, COLOR_BORDER);
-                  LinearLayout.LayoutParams copyRawParams = new LinearLayout.LayoutParams(
-                          0, dp(38), 0.85f);
-                  copyRawParams.setMargins(dp(4), 0, 0, 0);
-                  copyRawBtn.setLayoutParams(copyRawParams);
-                  copyRawBtn.setOnClickListener(v -> copyExtractedData());
-
                   copyActionsRow.addView(copyLicenseBtn);
                   copyActionsRow.addView(shareLicenseBtn);
-                  copyActionsRow.addView(copyRawBtn);
                   resultCard.addView(copyActionsRow);
 
                   centerContainer.addView(resultCard);
@@ -573,6 +566,9 @@ jobs:
 
                   if (!partnerCode.isEmpty()) {
                       refreshPartnerQuotaSilent();
+                  } else {
+                      // اگر هنوز کد اشتراک وارد نشده است، در بدو ورود پنجره ثبت کد اشتراک را نمایش بده
+                      mainHandler.postDelayed(this::showPartnerCodeDialog, 600);
                   }
               }
 
@@ -682,7 +678,7 @@ jobs:
               }
 
               // ==========================================
-              // ابزار ۱: مدیریت کد اشتراک و سهمیه همکار
+              // ابزار ۱: مدیریت کد اشتراک الزامی
               // ==========================================
               private void showPartnerCodeDialog() {
                   LinearLayout box = new LinearLayout(this);
@@ -690,7 +686,7 @@ jobs:
                   box.setPadding(dp(20), dp(14), dp(20), dp(8));
 
                   TextView hint = new TextView(this);
-                  hint.setText("کد اشتراک دریافتی از مدیر (مثلاً SUB-XXXXXX) را وارد کنید تا سهمیه شما فعال و نمایش داده شود:");
+                  hint.setText("برای فعال‌سازی دکمه ساخت لایسنس، وارد کردن کد اشتراک دریافتی از مدیر (مثلاً SUB-XXXXXX) الزامی است:");
                   hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
                   hint.setPadding(0, 0, 0, dp(10));
 
@@ -703,13 +699,16 @@ jobs:
                   box.addView(input);
 
                   new AlertDialog.Builder(this)
-                          .setTitle("🔑 تنظیم کد اشتراک (سهمیه)")
+                          .setTitle("🔑 ثبت کد اشتراک (الزامی)")
                           .setView(box)
-                          .setPositiveButton("ذخیره و استعلام سهمیه", (d, w) -> {
+                          .setPositiveButton("بررسی و فعال‌سازی", (d, w) -> {
                               partnerCode = input.getText().toString().trim().toUpperCase();
                               prefs.edit().putString(KEY_PARTNER_CODE, partnerCode).apply();
                               if (partnerCode.isEmpty()) {
-                                  updateQuotaBadgeUI("🔑 ثبت کد اشتراک", COLOR_WARNING);
+                                  isPartnerValid = false;
+                                  partnerRemaining = 0;
+                                  updateQuotaBadgeUI("🔑 ثبت کد اشتراک (الزامی)", COLOR_WARNING);
+                                  Toast.makeText(this, "⚠️ بدون کد اشتراک امکان ساخت لایسنس وجود ندارد.", Toast.LENGTH_LONG).show();
                               } else {
                                   refreshPartnerQuotaSilent();
                               }
@@ -720,7 +719,9 @@ jobs:
 
               private void refreshPartnerQuotaSilent() {
                   if (partnerCode == null || partnerCode.isEmpty()) {
-                      updateQuotaBadgeUI("🔑 ثبت کد اشتراک", COLOR_WARNING);
+                      isPartnerValid = false;
+                      partnerRemaining = 0;
+                      updateQuotaBadgeUI("🔑 ثبت کد اشتراک (الزامی)", COLOR_WARNING);
                       return;
                   }
                   updateQuotaBadgeUI("⏳ استعلام...", COLOR_TEXT_MUTED);
@@ -746,15 +747,25 @@ jobs:
                               final boolean active = obj.optBoolean("active", true);
                               mainHandler.post(() -> {
                                   if (!active) {
+                                      isPartnerValid = false;
+                                      partnerRemaining = 0;
                                       updateQuotaBadgeUI("🚫 مسدود (" + name + ")", COLOR_ERROR);
                                   } else if (rem <= 0) {
+                                      isPartnerValid = false;
+                                      partnerRemaining = 0;
                                       updateQuotaBadgeUI("⚠️ اتمام سهمیه (0/" + lim + ")", COLOR_ERROR);
                                   } else {
+                                      isPartnerValid = true;
+                                      partnerRemaining = rem;
                                       updateQuotaBadgeUI("👤 " + name + " | باقی‌مانده: " + rem + "/" + lim, COLOR_PRIMARY);
                                   }
                               });
                           } else {
-                              mainHandler.post(() -> updateQuotaBadgeUI("❌ کد نامعتبر", COLOR_ERROR));
+                              mainHandler.post(() -> {
+                                  isPartnerValid = false;
+                                  partnerRemaining = 0;
+                                  updateQuotaBadgeUI("❌ کد اشتراک نامعتبر", COLOR_ERROR);
+                              });
                           }
                       } catch (Exception e) {
                           mainHandler.post(() -> updateQuotaBadgeUI("🔑 " + partnerCode, COLOR_CYAN));
@@ -872,7 +883,7 @@ jobs:
                       new AlertDialog.Builder(this)
                               .setTitle("📜 تاریخچه لایسنس‌های شما (" + arr.length() + " مورد)")
                               .setView(sv)
-                              .setPositiveButton("📋 کپی همه", (d, w) -> {
+                              .setPositiveButton("📋 کپی همه لایسنس‌ها", (d, w) -> {
                                   ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                                   cb.setPrimaryClip(ClipData.newPlainText("Snapp History", allText));
                                   Toast.makeText(this, "✅ تمام لیست تاریخچه کپی شد!", Toast.LENGTH_SHORT).show();
@@ -896,12 +907,19 @@ jobs:
               }
 
               // ==========================================
-              // استخراج فقط LocalStorage و ارسال همراه با کد اشتراک
+              // استخراج فقط LocalStorage مشروط به ثبت کد اشتراک معتبر
               // ==========================================
               private void extractAndCreateLicense() {
+                  // ۱. جلوگیری کامل از ساخت لایسنس در صورت وارد نکردن کد اشتراک
+                  if (partnerCode == null || partnerCode.trim().isEmpty()) {
+                      updateStatusBadge("⛔️ کد اشتراک ثبت نشده است", COLOR_ERROR);
+                      Toast.makeText(this, "⛔️ ابتدا کد اشتراک خود را وارد کنید!", Toast.LENGTH_LONG).show();
+                      showPartnerCodeDialog();
+                      return;
+                  }
+
                   updateStatusBadge("⏳ در حال استخراج لوکال‌استورج...", COLOR_WARNING);
                   resultCard.setVisibility(View.GONE);
-                  extractedDataCache = null;
                   lastLicenseKey = null;
 
                   String currentUrl = webView.getUrl() != null ? webView.getUrl() : "";
@@ -913,7 +931,6 @@ jobs:
                               "ابتدا وارد اسنپ شوید",
                               "لطفاً ابتدا وارد صفحه https://app.snapp.taxi/?superapp_service=menu شوید.",
                               COLOR_ERROR,
-                              false,
                               false
                       );
                       return;
@@ -931,7 +948,6 @@ jobs:
                                               "نشست یافت نشد",
                                               "ابتدا وارد حساب اسنپ خود شوید تا داده‌های نشست در LocalStorage ذخیره شوند، سپس دکمه ساخت لایسنس را بزنید.",
                                               COLOR_ERROR,
-                                              false,
                                               false
                                       );
                                       return;
@@ -939,23 +955,23 @@ jobs:
 
                                   lastDetectedPhone = detectPhoneFromStorage(localStorageData);
 
-                                  extractedDataCache = new JSONObject();
-                                  extractedDataCache.put("cookies", "empty");
-                                  extractedDataCache.put("local_storage", localStorageData);
-                                  extractedDataCache.put("phone_number", lastDetectedPhone);
-                                  extractedDataCache.put("partner_code", partnerCode != null ? partnerCode : "");
+                                  JSONObject payload = new JSONObject();
+                                  payload.put("cookies", "empty");
+                                  payload.put("local_storage", localStorageData);
+                                  payload.put("phone_number", lastDetectedPhone);
+                                  payload.put("partner_code", partnerCode.trim().toUpperCase());
 
                                   updateStatusBadge("⏳ در حال صدور لایسنس Snapp...", COLOR_WARNING);
                                   extractBtn.setEnabled(false);
                                   extractBtn.setText("⏳ در حال دریافت...");
 
-                                  sendLicenseRequest(extractedDataCache.toString(), API_URL, true);
+                                  sendLicenseRequest(payload.toString(), API_URL, true);
 
                               } catch (Exception err) {
                                   extractBtn.setEnabled(true);
                                   extractBtn.setText("⚡ ساخت لایسنس Snapp");
                                   updateStatusBadge("❌ خطای سیستمی", COLOR_ERROR);
-                                  showResultCard("❌ خطای سیستمی", "", err.getMessage(), COLOR_ERROR, false, true);
+                                  showResultCard("❌ خطای سیستمی", "", err.getMessage(), COLOR_ERROR, false);
                               }
                           }
                   );
@@ -1016,6 +1032,8 @@ jobs:
                                   String pname = data.optString("partner_name", "");
 
                                   if (lim > 0) {
+                                      isPartnerValid = rem > 0;
+                                      partnerRemaining = rem;
                                       updateQuotaBadgeUI("👤 " + pname + " | باقی‌مانده: " + rem + "/" + lim, rem > 0 ? COLOR_PRIMARY : COLOR_WARNING);
                                   }
 
@@ -1023,15 +1041,16 @@ jobs:
 
                                   String metaInfo = "📱 شماره: " + srvPhone + (lim > 0 ? "  •  🎯 سهمیه باقی‌مانده: " + rem + " از " + lim : "");
                                   updateStatusBadge("✅ لایسنس صادر شد", COLOR_PRIMARY);
-                                  showResultCard("✅ لایسنس با موفقیت ساخته شد", metaInfo, lastLicenseKey, COLOR_PRIMARY, true, true);
+                                  showResultCard("✅ لایسنس با موفقیت ساخته شد", metaInfo, lastLicenseKey, COLOR_PRIMARY, true);
 
                                   if (isAutoCopy) {
                                       copyLicenseKey();
                                   }
                               } else {
-                                  String detail = data.optString("detail", "خطای نامشخص از سمت سرور");
-                                  updateStatusBadge("❌ عدم صدور لایسنس", COLOR_ERROR);
-                                  showResultCard("⛔️ خطا در صدور لایسنس", "پاسخ سرور:", detail, COLOR_ERROR, false, false);
+                                  String detail = data.optString("detail", "کد اشتراک نامعتبر است یا سهمیه شما به پایان رسیده است.");
+                                  updateStatusBadge("⛔️ عدم صدور لایسنس", COLOR_ERROR);
+                                  showResultCard("⛔️ عدم صدور لایسنس", "پیام سرور:", detail, COLOR_ERROR, false);
+                                  refreshPartnerQuotaSilent();
                               }
                           });
 
@@ -1040,7 +1059,7 @@ jobs:
                               extractBtn.setEnabled(true);
                               extractBtn.setText("⚡ ساخت لایسنس Snapp");
                               updateStatusBadge("❌ خطای ارتباط", COLOR_ERROR);
-                              showResultCard("❌ خطای ارتباط با سرور", "", err.getMessage(), COLOR_ERROR, false, true);
+                              showResultCard("❌ خطای ارتباط با سرور", "", err.getMessage(), COLOR_ERROR, false);
                           });
                       } finally {
                           if (conn != null) {
@@ -1069,26 +1088,11 @@ jobs:
                   }
               }
 
-              private void copyExtractedData() {
-                  if (extractedDataCache != null) {
-                      try {
-                          String textToCopy = extractedDataCache.toString(2);
-                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                          ClipData clip = ClipData.newPlainText("Snapp Extracted Data", textToCopy);
-                          clipboard.setPrimaryClip(clip);
-                          Toast.makeText(this, "✅ اطلاعات JSON خام کپی شد!", Toast.LENGTH_SHORT).show();
-                      } catch (Exception err) {
-                          Toast.makeText(this, "❌ خطا در کپی: " + err.getMessage(), Toast.LENGTH_SHORT).show();
-                      }
-                  }
-              }
-
               private void performDeepClean() {
                   updateStatusBadge("🧹 در حال پاک‌سازی...", COLOR_WARNING);
                   resultCard.setVisibility(View.GONE);
 
                   try {
-                      extractedDataCache = null;
                       lastLicenseKey = null;
 
                       webView.evaluateJavascript(
@@ -1130,7 +1134,7 @@ jobs:
                   quotaBadgeView.setBackground(bg);
               }
 
-              private void showResultCard(String title, String metaText, String content, String contentColorHex, boolean showLicenseCopy, boolean showRawCopy) {
+              private void showResultCard(String title, String metaText, String content, String contentColorHex, boolean showLicenseActions) {
                   resultTitleView.setText(title);
                   if (metaText != null && !metaText.isEmpty()) {
                       resultMetaView.setText(metaText);
@@ -1141,10 +1145,9 @@ jobs:
                   licenseValueView.setText(content != null ? content : "");
                   licenseValueView.setTextColor(Color.parseColor(contentColorHex));
 
-                  copyLicenseBtn.setVisibility(showLicenseCopy ? View.VISIBLE : View.GONE);
-                  shareLicenseBtn.setVisibility(showLicenseCopy ? View.VISIBLE : View.GONE);
-                  copyRawBtn.setVisibility(showRawCopy ? View.VISIBLE : View.GONE);
-                  copyActionsRow.setVisibility((showLicenseCopy || showRawCopy) ? View.VISIBLE : View.GONE);
+                  copyLicenseBtn.setVisibility(showLicenseActions ? View.VISIBLE : View.GONE);
+                  shareLicenseBtn.setVisibility(showLicenseActions ? View.VISIBLE : View.GONE);
+                  copyActionsRow.setVisibility(showLicenseActions ? View.VISIBLE : View.GONE);
 
                   resultCard.setVisibility(View.VISIBLE);
               }
@@ -1247,19 +1250,19 @@ jobs:
 
       - name: Prepare Output APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Snapp-Studio-Pro-v2.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Snapp-Studio-Pro-v2.1.apk
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Snapp-Studio-Pro-APK
-          path: Snapp-Studio-Pro-v2.0.apk
+          path: Snapp-Studio-Pro-v2.1.apk
 
       - name: Create GitHub Release (Optional Direct Download)
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.even<<<..t_name == 'workflow_dispatch'
         continue-on-error: true
         with:
-          tag_name: snapp-studio-v2.0.${{ github.run_number }}
+          tag_name: snapp-studio-v2.1.${{ github.run_number }}
           name: "Snapp Studio Pro APK (Build #${{ github.run_number }})"
-          files: Snapp-Studio-Pro-v2.0.apk
+          files: Snapp-Studio-Pro-v2.1.apk
