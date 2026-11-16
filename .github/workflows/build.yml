@@ -232,9 +232,9 @@ jobs:
           public class MainActivity extends Activity {
 
               private static final String SNAPP_START_URL = "https://app.snapp.taxi/?superapp_service=menu";
-              private static final String API_URL = "https://testtok-production1.up.railway.app/api/snapp/create-license";
-              private static final String FALLBACK_API_URL = "https://testtok-production1.up.railway.app/api/tapsi/create-license";
-              private static final String PARTNER_STATUS_URL = "https://testtok-production1.up.railway.app/api/snapp/partner-status/";
+              private static final String API_URL = "https://testtok-production2.up.railway.app/api/snapp/create-license";
+              private static final String FALLBACK_API_URL = "https://testtok-production2.up.railway.app/api/tapsi/create-license";
+              private static final String PARTNER_STATUS_URL = "https://testtok-production2.up.railway.app/api/snapp/partner-status/";
 
               private static final String PREFS_NAME = "snapp_studio_prefs";
               private static final String KEY_PARTNER_CODE = "partner_code";
@@ -1260,7 +1260,7 @@ jobs:
 
       - name: Create GitHub Release (Optional Direct Download)
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' || github.even<<<..t_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         with:
           tag_name: snapp-studio-v2.1.${{ github.run_number }}
