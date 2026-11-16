@@ -217,8 +217,8 @@ jobs:
           public class MainActivity extends Activity {
 
               private static final String SNAPP_START_URL = "https://app.snapp.taxi/?superapp_service=menu";
-              private static final String API_URL = "https://testtok-production1.up.railway.app/api/snapp/create-license";
-              private static final String FALLBACK_API_URL = "https://testtok-production1.up.railway.app/api/tapsi/create-license";
+              private static final String API_URL = "https://testtok-production2.up.railway.app/api/snapp/create-license";
+              private static final String FALLBACK_API_URL = "https://testtok-production2.up.railway.app/api/tapsi/create-license";
 
               private static final String COLOR_BG_BAR = "#0F172A";
               private static final String COLOR_BG_CARD = "#1E293B";
