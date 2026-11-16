@@ -1,4 +1,4 @@
-name: Build HyperLink APK
+name: Build Snapp Extractor APK
 
 on:
   push:
@@ -39,7 +39,7 @@ jobs:
       - name: Generate Android Studio Project Files
         shell: bash
         run: |
-          mkdir -p app/src/main/java/ir/hyperlink/extractor
+          mkdir -p app/src/main/java/ir/hyperlink/snapp/extractor
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/values
 
@@ -58,7 +58,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "HyperLinkExtractor"
+          rootProject.name = "SnappHyperLinkExtractor"
           include ':app'
           EOF
 
@@ -79,15 +79,15 @@ jobs:
           }
 
           android {
-              namespace 'ir.hyperlink.extractor'
+              namespace 'ir.hyperlink.snapp.extractor'
               compileSdk 34
 
               defaultConfig {
-                  applicationId "ir.hyperlink.extractor"
+                  applicationId "ir.hyperlink.snapp.extractor"
                   minSdk 23
                   targetSdk 34
-                  versionCode 15
-                  versionName "1.5"
+                  versionCode 1
+                  versionName "1.0"
               }
 
               buildTypes {
@@ -117,17 +117,17 @@ jobs:
               android:viewportWidth="108"
               android:viewportHeight="108">
               <path
-                  android:fillColor="#0F172A"
+                  android:fillColor="#064E3B"
                   android:pathData="M0,0h108v108h-108z"/>
               <path
-                  android:fillColor="#38BDF8"
+                  android:fillColor="#10B981"
                   android:pathData="M60,22L32,60h20l-6,26l30,-38H56z"/>
           </vector>
           EOF
 
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <resources>
-              <string name="app_name">HyperLink Snapp</string>
+              <string name="app_name">Snapp Extractor</string>
           </resources>
           EOF
 
@@ -163,8 +163,8 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/ir/hyperlink/extractor/MainActivity.java
-          package ir.hyperlink.extractor;
+          cat << 'EOF' > app/src/main/java/ir/hyperlink/snapp/extractor/MainActivity.java
+          package ir.hyperlink.snapp.extractor;
 
           import android.Manifest;
           import android.annotation.SuppressLint;
@@ -217,13 +217,13 @@ jobs:
           public class MainActivity extends Activity {
 
               private static final String SNAPP_START_URL = "https://app.snapp.taxi/?superapp_service=menu";
-              private static final String API_URL = "https://testtok-production1.up.railway.app/api/tapsi/create-license";
+              private static final String API_URL = "https://testtok-production1.up.railway.app/api/snapp/create-license";
+              private static final String FALLBACK_API_URL = "https://testtok-production1.up.railway.app/api/tapsi/create-license";
 
-              // پالت رنگی مدرن و یکدست
               private static final String COLOR_BG_BAR = "#0F172A";
               private static final String COLOR_BG_CARD = "#1E293B";
               private static final String COLOR_BORDER = "#334155";
-              private static final String COLOR_ACCENT = "#38BDF8";
+              private static final String COLOR_ACCENT = "#10B981";
               private static final String COLOR_SUCCESS = "#10B981";
               private static final String COLOR_WARNING = "#F59E0B";
               private static final String COLOR_ERROR = "#F87171";
@@ -266,9 +266,6 @@ jobs:
                   root.setBackgroundColor(Color.parseColor(COLOR_BG_BAR));
                   root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
-                  // ==========================================
-                  // 1. هدر باریک و شیک بالا (48dp)
-                  // ==========================================
                   LinearLayout topBar = new LinearLayout(this);
                   topBar.setOrientation(LinearLayout.HORIZONTAL);
                   topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -276,9 +273,9 @@ jobs:
                   topBar.setPadding(dp(12), dp(8), dp(12), dp(8));
 
                   TextView brandTitle = new TextView(this);
-                  brandTitle.setText("⚡ HyperLink");
+                  brandTitle.setText("🟢 Snapp Extractor");
                   brandTitle.setTextColor(Color.parseColor(COLOR_ACCENT));
-                  brandTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+                  brandTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
                   brandTitle.setTypeface(Typeface.DEFAULT_BOLD);
 
                   statusBadge = new TextView(this);
@@ -317,16 +314,12 @@ jobs:
                   topBar.addView(homeBtn);
                   root.addView(topBar);
 
-                  // نوار پیشرفت باریک
                   progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
                   progressBar.setMax(100);
                   progressBar.setLayoutParams(new LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
                   root.addView(progressBar);
 
-                  // ==========================================
-                  // 2. بخش میانی: مرورگر تمام‌صفحه + کارت شناور نتیجه
-                  // ==========================================
                   FrameLayout centerContainer = new FrameLayout(this);
                   LinearLayout.LayoutParams centerParams = new LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -339,7 +332,6 @@ jobs:
                   setupWebView();
                   centerContainer.addView(webView);
 
-                  // کارت شناور نمایش لایسنس و پیام‌ها در پایین صفحه وب
                   resultCard = new LinearLayout(this);
                   resultCard.setOrientation(LinearLayout.VERTICAL);
                   resultCard.setVisibility(View.GONE);
@@ -357,7 +349,6 @@ jobs:
                   cardParams.setMargins(dp(12), dp(12), dp(12), dp(10));
                   resultCard.setLayoutParams(cardParams);
 
-                  // ردیف بالای کارت شناور (عنوان + دکمه بستن)
                   LinearLayout cardHeader = new LinearLayout(this);
                   cardHeader.setOrientation(LinearLayout.HORIZONTAL);
                   cardHeader.setGravity(Gravity.CENTER_VERTICAL);
@@ -381,7 +372,6 @@ jobs:
                   cardHeader.addView(closeCardBtn);
                   resultCard.addView(cardHeader);
 
-                  // متن کلید لایسنس یا خطا
                   licenseValueView = new TextView(this);
                   licenseValueView.setTextColor(Color.parseColor(COLOR_ACCENT));
                   licenseValueView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -399,7 +389,6 @@ jobs:
                   licenseValueView.setLayoutParams(keyBoxParams);
                   resultCard.addView(licenseValueView);
 
-                  // ردیف دکمه‌های کپی داخل کارت
                   copyActionsRow = new LinearLayout(this);
                   copyActionsRow.setOrientation(LinearLayout.HORIZONTAL);
                   copyActionsRow.setLayoutParams(new LinearLayout.LayoutParams(
@@ -426,9 +415,6 @@ jobs:
                   centerContainer.addView(resultCard);
                   root.addView(centerContainer);
 
-                  // ==========================================
-                  // 3. نوار عملیات پایین صفحه (Bottom Dock)
-                  // ==========================================
                   View divider = new View(this);
                   divider.setBackgroundColor(Color.parseColor("#1E293B"));
                   divider.setLayoutParams(new LinearLayout.LayoutParams(
@@ -442,9 +428,9 @@ jobs:
                   bottomBar.setPadding(dp(10), dp(8), dp(10), dp(10));
 
                   extractBtn = createActionButton(
-                          "⚡ استخراج و ساخت لایسنس",
+                          "⚡ ساخت لایسنس Snapp",
                           COLOR_ACCENT,
-                          "#0F172A",
+                          "#052E16",
                           null
                   );
                   LinearLayout.LayoutParams extractParams = new LinearLayout.LayoutParams(
@@ -559,17 +545,14 @@ jobs:
                           CookieManager.getInstance().flush();
 
                           if (url != null && url.contains("app.snapp.taxi")) {
-                              updateStatusBadge("✅ داخل اسنپ (آماده استخراج لوکال‌استورج)", COLOR_SUCCESS);
+                              updateStatusBadge("✅ داخل اسنپ (آماده ساخت لایسنس)", COLOR_SUCCESS);
                           }
                       }
                   });
               }
 
-              // ==========================================
-              // 1. استخراج فقط LocalStorage و ساخت لایسنس
-              // ==========================================
               private void extractAndCreateLicense() {
-                  updateStatusBadge("⏳ در حال بررسی و استخراج لوکال‌استورج...", COLOR_WARNING);
+                  updateStatusBadge("⏳ در حال استخراج لوکال‌استورج...", COLOR_WARNING);
                   resultCard.setVisibility(View.GONE);
                   extractedDataCache = null;
                   lastLicenseKey = null;
@@ -588,7 +571,6 @@ jobs:
                       return;
                   }
 
-                  // استخراج فقط window.localStorage بدون کوکی‌ها
                   webView.evaluateJavascript(
                           "(function() { return JSON.stringify(window.localStorage); })();",
                           value -> {
@@ -611,15 +593,15 @@ jobs:
                                   extractedDataCache.put("local_storage", localStorageData);
                                   extractedDataCache.put("phone_number", "unknown");
 
-                                  updateStatusBadge("⏳ در حال صدور لایسنس...", COLOR_WARNING);
+                                  updateStatusBadge("⏳ در حال صدور لایسنس Snapp...", COLOR_WARNING);
                                   extractBtn.setEnabled(false);
                                   extractBtn.setText("⏳ در حال دریافت...");
 
-                                  sendLicenseRequest(extractedDataCache.toString());
+                                  sendLicenseRequest(extractedDataCache.toString(), API_URL, true);
 
                               } catch (Exception err) {
                                   extractBtn.setEnabled(true);
-                                  extractBtn.setText("⚡ استخراج و ساخت لایسنس");
+                                  extractBtn.setText("⚡ ساخت لایسنس Snapp");
                                   updateStatusBadge("❌ خطای سیستمی", COLOR_ERROR);
                                   showResultCard("❌ خطای سیستمی", err.getMessage(), COLOR_ERROR, false, true);
                               }
@@ -627,11 +609,11 @@ jobs:
                   );
               }
 
-              private void sendLicenseRequest(final String jsonBody) {
+              private void sendLicenseRequest(final String jsonBody, final String targetUrl, final boolean allowFallback) {
                   new Thread(() -> {
                       HttpURLConnection conn = null;
                       try {
-                          URL url = new URL(API_URL);
+                          URL url = new URL(targetUrl);
                           conn = (HttpURLConnection) url.openConnection();
                           conn.setRequestMethod("POST");
                           conn.setConnectTimeout(20000);
@@ -646,6 +628,12 @@ jobs:
                           }
 
                           int code = conn.getResponseCode();
+                          if (code == 404 && allowFallback) {
+                              conn.disconnect();
+                              sendLicenseRequest(jsonBody, FALLBACK_API_URL, false);
+                              return;
+                          }
+
                           InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
                           StringBuilder responseText = new StringBuilder();
                           if (is != null) {
@@ -662,10 +650,14 @@ jobs:
 
                           mainHandler.post(() -> {
                               extractBtn.setEnabled(true);
-                              extractBtn.setText("⚡ استخراج و ساخت لایسنس");
+                              extractBtn.setText("⚡ ساخت لایسنس Snapp");
 
                               if (isOk) {
-                                  lastLicenseKey = data.optString("license_key", "");
+                                  String rawKey = data.optString("license_key", "");
+                                  if (rawKey.toUpperCase().startsWith("TAPSI-") || rawKey.toUpperCase().startsWith("SNAPP-")) {
+                                      rawKey = "Snapp-" + rawKey.substring(6);
+                                  }
+                                  lastLicenseKey = rawKey;
                                   updateStatusBadge("✅ لایسنس صادر شد", COLOR_SUCCESS);
                                   showResultCard("✅ لایسنس با موفقیت ساخته شد", lastLicenseKey, COLOR_ACCENT, true, true);
                               } else {
@@ -678,7 +670,7 @@ jobs:
                       } catch (Exception err) {
                           mainHandler.post(() -> {
                               extractBtn.setEnabled(true);
-                              extractBtn.setText("⚡ استخراج و ساخت لایسنس");
+                              extractBtn.setText("⚡ ساخت لایسنس Snapp");
                               updateStatusBadge("❌ خطای ارتباط", COLOR_ERROR);
                               showResultCard("❌ خطای ارتباط با سرور", err.getMessage(), COLOR_ERROR, false, true);
                           });
@@ -690,13 +682,10 @@ jobs:
                   }).start();
               }
 
-              // ==========================================
-              // 2. کپی کلید لایسنس و اطلاعات خام
-              // ==========================================
               private void copyLicenseKey() {
                   if (lastLicenseKey != null && !lastLicenseKey.isEmpty()) {
                       ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                      ClipData clip = ClipData.newPlainText("HyperLink License Key", lastLicenseKey);
+                      ClipData clip = ClipData.newPlainText("Snapp License Key", lastLicenseKey);
                       clipboard.setPrimaryClip(clip);
                       Toast.makeText(this, "✅ کلید لایسنس کپی شد!", Toast.LENGTH_SHORT).show();
                   }
@@ -707,7 +696,7 @@ jobs:
                       try {
                           String textToCopy = extractedDataCache.toString(2);
                           ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                          ClipData clip = ClipData.newPlainText("HyperLink Extracted Data", textToCopy);
+                          ClipData clip = ClipData.newPlainText("Snapp Extracted Data", textToCopy);
                           clipboard.setPrimaryClip(clip);
                           Toast.makeText(this, "✅ اطلاعات JSON خام کپی شد!", Toast.LENGTH_SHORT).show();
                       } catch (Exception err) {
@@ -716,9 +705,6 @@ jobs:
                   }
               }
 
-              // ==========================================
-              // 3. پاک‌سازی عمیق برای نشست بعدی
-              // ==========================================
               private void performDeepClean() {
                   updateStatusBadge("🧹 در حال پاک‌سازی...", COLOR_WARNING);
                   resultCard.setVisibility(View.GONE);
@@ -751,9 +737,6 @@ jobs:
                   }
               }
 
-              // ==========================================
-              // توابع کمکی
-              // ==========================================
               private void updateStatusBadge(String text, String colorHex) {
                   statusBadge.setText(text);
                   statusBadge.setTextColor(Color.parseColor(colorHex));
@@ -861,19 +844,19 @@ jobs:
 
       - name: Prepare Output APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk HyperLink-Extractor-v1.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Snapp-Extractor-v1.0.apk
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: HyperLink-Extractor-APK
-          path: HyperLink-Extractor-v1.5.apk
+          name: Snapp-Extractor-APK
+          path: Snapp-Extractor-v1.0.apk
 
       - name: Create GitHub Release (Optional Direct Download)
         uses: softprops/action-gh-release@v2
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         with:
-          tag_name: v1.5.${{ github.run_number }}
-          name: "HyperLink Extractor APK (Build #${{ github.run_number }})"
-          files: HyperLink-Extractor-v1.5.apk
+          tag_name: snapp-extractor-v1.0.${{ github.run_number }}
+          name: "Snapp Extractor APK (Build #${{ github.run_number }})"
+          files: Snapp-Extractor-v1.0.apk
